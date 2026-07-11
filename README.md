@@ -216,10 +216,35 @@ AUC (stratified 5-fold CV) เทียบ baselines — leadx เปิด auto
 | synthetic hard | 0.860 | **0.926** | 0.925 | 0.902 | 0.834 |
 
 **สรุป:** leadx แข่งได้สูสีบน dataset ที่แยกได้ดี (breast_cancer) แต่ตามหลัง tree-based
-2–6 AUC points บนข้อมูลที่ signal กระจายหรือ boundary โค้ง (two_moons) — เป็น trade-off
-ที่คาดไว้: แลกความแม่นเล็กน้อยกับความเร็วและ scalability (predict 1M rows < 1s ที่คู่แข่ง
-tree-based/kNN ทำไม่ทัน) จุดคุ้มของ leadx คือข้อมูล**ใหญ่มาก**ที่ latency สำคัญ ไม่ใช่
-dataset เล็กที่ accuracy ทุกจุดมีค่า
+2–6 AUC points บนข้อมูลที่ signal กระจายหรือ boundary โค้ง (two_moons) — trade-off
+ที่คาดไว้: แลกความแม่นกับความเรียบง่ายของโครงสร้าง (model = hash tables)
+
+## Large + imbalanced data — อ่านตามจริง
+
+โจทย์ใหญ่ + positive หายาก (งาน lead scoring / fraud / churn) วัดด้วย **PR-AUC**
+(สำคัญกว่า ROC-AUC บน imbalanced) — [examples/large_imbalanced.py](examples/large_imbalanced.py):
+
+| train / test | metric | **leadx** | HistGradBoost | LogReg |
+|---|---|---|---|---|
+| 100k / 500k (2% pos) | PR-AUC | 0.21 | **0.63** | 0.13 |
+| 500k / 1M (1% pos) | PR-AUC | 0.23 | **0.50** | 0.20 |
+| 500k / 1M | fit time | 18s | **2s** | 0.2s |
+
+> ⚠️ **บน imbalanced tabular ที่มี labeled negatives — gradient boosting ชนะขาด**
+> (PR-AUC สูงกว่า ~3× และ fit เร็วกว่า). leadx **ไม่ใช่**เครื่องมือที่เหมาะกับโจทย์นี้
+
+**แล้ว leadx คุ้มตรงไหน?** — niche จริงคือ **PU learning**: มีแต่ positive ยืนยันแล้ว +
+unlabeled ไม่มี labeled negative เลย (boosting/LogReg รันไม่ได้). ในโหมดนี้ leadx จัดอันดับ
+rare positives ได้ **PR-AUC 0.23 เท่ากับตอนมี label ครบ** — คือ density approach ของมัน
+เป็น PU โดยธรรมชาติ ใช้ negative labels น้อยมาก:
+
+```
+leadx PU: PR-AUC=0.233 (baseline 0.015) | fit=0.9s | seeds=7,471 positives เท่านั้น
+```
+
+**บรรทัดสุดท้ายแบบซื่อตรง:** ถ้ามี label ครบและเป็น two-class → ใช้ gradient boosting.
+เลือก leadx เมื่อ (1) เป็น PU ไม่มี labeled negative, หรือ (2) ต้อง deploy เป็น hash
+table ธรรมดาไม่มี model server. predict เร็วจริง แต่ "เร็วกว่า kNN" ไม่ใช่ "เร็วกว่า boosting"
 
 ## Examples
 
@@ -227,6 +252,7 @@ dataset เล็กที่ accuracy ทุกจุดมีค่า
 uv run python examples/worked_example.py   # end-to-end: categorical + missing → fit/tune/predict/diagnostics/save-load
 uv run python examples/benchmark.py        # AUC + เวลา เทียบ kNN / LightGBM หลายขนาดข้อมูล
 uv run python examples/auc_comparison.py   # AUC เทียบ 5 algorithms บน 4 dataset (5-fold CV)
+uv run python examples/large_imbalanced.py # large + imbalanced: PR-AUC + PU niche demo
 ```
 
 `worked_example.py` สาธิต workflow เต็มบนข้อมูลลูกค้าสังเคราะห์ที่มีทั้ง numeric,
