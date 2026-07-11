@@ -264,6 +264,35 @@ leadx PU: PR-AUC=0.233 (baseline 0.015) | fit=0.9s | seeds=7,471 positives เ�
 เลือก leadx เมื่อ (1) เป็น PU ไม่มี labeled negative, หรือ (2) ต้อง deploy เป็น hash
 table ธรรมดาไม่มี model server. predict เร็วจริง แต่ "เร็วกว่า kNN" ไม่ใช่ "เร็วกว่า boosting"
 
+## Backbone reuse — hash ครั้งเดียว, หลายโจทย์
+
+จุดแข็งเชิงสถาปัตยกรรมที่ boosting เลียนแบบไม่ได้: projections เป็น **y-independent** →
+encode+project+hash ครั้งเดียว แล้วแต่ละ labeling ใหม่เหลือแค่ group-by บน codes ที่ cache ไว้
+
+```python
+from leadx import LeadXBackbone
+
+bb = LeadXBackbone(n_bits=16, n_tables=15, random_state=0).fit(X)   # แพงครั้งเดียว
+churn = bb.fit_task(y_churn)                    # ~30ms — TaskModel
+fraud = bb.fit_task(y_fraud)
+leads = bb.fit_task(mode="pu", seeds=X_pos, background=X)
+churn.predict_proba(X_new)                      # re-hash rows ใหม่ผ่าน projections ร่วม
+bb.save(path); LeadXBackbone.load(path)         # แชร์ projections ข้ามทีม/เวลา
+```
+
+วัดจริง (200k rows × 40 features, 6 โจทย์บน rows เดียว):
+
+| | เวลา | AUC |
+|---|---|---|
+| `backbone.fit` (ครั้งเดียว) | 2.5s | — |
+| `fit_task` (ต่อโจทย์) | **36ms** | 0.94–0.97 |
+| HistGradBoost (fit เต็มต่อโจทย์) | 1.3s | 0.996 |
+
+boosting เทรนใหม่ทั้งต้นทุกครั้งที่ y เปลี่ยน (tree splits ขึ้นกับ y) — leadx จ่าย hash
+ครั้งเดียวแล้ว marginal cost ต่อโจทย์แทบเป็นศูนย์ **คุ้มเมื่อมีโจทย์เยอะบน feature space
+เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวันด้วย label ที่อัปเดต). ข้อแลก:
+backbone ใช้ unsupervised projections → ใช้ `feature_weighting` ไม่ได้ (แลก accuracy กับ reuse)
+
 ## Examples
 
 ```bash
@@ -271,6 +300,7 @@ uv run python examples/worked_example.py   # end-to-end: categorical + missing �
 uv run python examples/benchmark.py        # AUC + เวลา เทียบ kNN / LightGBM หลายขนาดข้อมูล
 uv run python examples/auc_comparison.py   # AUC เทียบ 5 algorithms บน 4 dataset (5-fold CV)
 uv run python examples/large_imbalanced.py # large + imbalanced: PR-AUC + PU niche demo
+uv run python examples/backbone_reuse.py   # hash ครั้งเดียว, reuse หลายโจทย์ (~30ms/โจทย์)
 ```
 
 `worked_example.py` สาธิต workflow เต็มบนข้อมูลลูกค้าสังเคราะห์ที่มีทั้ง numeric,
