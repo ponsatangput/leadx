@@ -204,11 +204,29 @@ LeadX (facade)
 
 ---
 
+## Accuracy vs other algorithms
+
+AUC (stratified 5-fold CV) เทียบ baselines — leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
+
+| dataset | leadx | HistGradBoost | RandomForest | kNN | LogReg |
+|---|---|---|---|---|---|
+| breast_cancer (real) | 0.991 | 0.994 | 0.992 | 0.991 | **0.995** |
+| synthetic linear | 0.974 | **0.992** | 0.987 | 0.989 | 0.889 |
+| two_moons (non-linear) | 0.913 | 0.984 | 0.980 | **0.986** | 0.943 |
+| synthetic hard | 0.860 | **0.926** | 0.925 | 0.902 | 0.834 |
+
+**สรุป:** leadx แข่งได้สูสีบน dataset ที่แยกได้ดี (breast_cancer) แต่ตามหลัง tree-based
+2–6 AUC points บนข้อมูลที่ signal กระจายหรือ boundary โค้ง (two_moons) — เป็น trade-off
+ที่คาดไว้: แลกความแม่นเล็กน้อยกับความเร็วและ scalability (predict 1M rows < 1s ที่คู่แข่ง
+tree-based/kNN ทำไม่ทัน) จุดคุ้มของ leadx คือข้อมูล**ใหญ่มาก**ที่ latency สำคัญ ไม่ใช่
+dataset เล็กที่ accuracy ทุกจุดมีค่า
+
 ## Examples
 
 ```bash
 uv run python examples/worked_example.py   # end-to-end: categorical + missing → fit/tune/predict/diagnostics/save-load
 uv run python examples/benchmark.py        # AUC + เวลา เทียบ kNN / LightGBM หลายขนาดข้อมูล
+uv run python examples/auc_comparison.py   # AUC เทียบ 5 algorithms บน 4 dataset (5-fold CV)
 ```
 
 `worked_example.py` สาธิต workflow เต็มบนข้อมูลลูกค้าสังเคราะห์ที่มีทั้ง numeric,
