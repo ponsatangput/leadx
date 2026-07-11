@@ -44,6 +44,10 @@ class LeadX:
         วิธีรวม score ข้าม tables; "coverage" ให้ table ที่ miss เยอะพูดเบาลง
     grid : dict | None
         override grid สำหรับ auto-tune (คีย์: n_bits, n_tables, m, weights, strategy)
+    feature_weighting : {"none", "corr"}
+        "corr" ถ่วง feature ตาม |corr กับ y| ก่อน hash (แก้ noise dilution — feature
+        ที่ไม่เกี่ยวได้น้ำหนักต่ำ ไม่ปน hash). two_class เท่านั้น. ใช้ y → codes กลาย
+        เป็น task-specific จึงปิดการ reuse projections ข้ามโจทย์ (default "none")
     chunk_size : int
         ขนาด chunk ตอน predict — คุม peak memory บนข้อมูลใหญ่
     random_state : int
@@ -67,9 +71,11 @@ class LeadX:
 
     def __init__(self, mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
                  strategy="unsupervised", weights="mean", grid=None,
-                 chunk_size=1_000_000, random_state=0):
+                 feature_weighting="none", chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
+        if feature_weighting not in ("none", "corr"):
+            raise ValueError(f"feature_weighting ไม่รู้จัก: {feature_weighting}")
         self.mode = mode
         self.tune = tune
         self.n_bits = n_bits
@@ -78,6 +84,7 @@ class LeadX:
         self.strategy = strategy
         self.weights = weights
         self.grid = grid
+        self.feature_weighting = feature_weighting
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -108,7 +115,15 @@ class LeadX:
         y = np.ones(n) if (self.mode == "pu" and y is None) else np.asarray(y, dtype=np.float64)
         self.encoder_ = FeatureEncoder().fit(df)
         Z = self.encoder_.transform(df)
+        # feature weighting (หลัง standardize มิฉะนั้นถูก z-score หักล้าง) — แก้ noise
+        # dilution: ถ่วง feature ตาม |corr กับ y| ก่อน hash. ใช้ y → codes task-specific
+        # (ปิด reuse ข้ามโจทย์) จึง opt-in default "none"
+        self.feature_weights_ = self._compute_weights(Z, y)
+        if self.feature_weights_ is not None:
+            Z = Z * self.feature_weights_
         Z_bg = self.encoder_.transform(background) if background is not None else None
+        if Z_bg is not None and self.feature_weights_ is not None:
+            Z_bg = Z_bg * self.feature_weights_
         if self.tune:
             tuner = Tuner(grid=self.grid, mode=self.mode, random_state=self.random_state)
             best = tuner.tune(Z, y, Z_background=Z_bg)
@@ -133,6 +148,18 @@ class LeadX:
         self.diagnostics_ = {"projections": bank.diagnostics(), "config": cfg}
         return self
 
+    def _compute_weights(self, Z: np.ndarray, y: np.ndarray):
+        """น้ำหนัก feature = |point-biserial corr กับ y| (Z standardize แล้ว)
+
+        คืน None ถ้า feature_weighting="none" หรือ mode="pu" (ไม่มี y ให้วัด corr)
+        """
+        if self.feature_weighting == "none" or self.mode != "two_class":
+            return None
+        yc = y - y.mean()
+        denom = np.sqrt((Z ** 2).sum(axis=0)) * np.sqrt((yc ** 2).sum()) + 1e-12
+        w = np.abs((Z * yc[:, None]).sum(axis=0) / denom)
+        return w.astype(np.float32)
+
     def score_samples(self, df: pl.DataFrame) -> np.ndarray:
         """คืน score ต่อแถว (ใช้ได้ทั้งสอง mode)
 
@@ -149,6 +176,8 @@ class LeadX:
         numpy.ndarray, shape (n,)
         """
         Z = self.encoder_.transform(df)
+        if self.feature_weights_ is not None:
+            Z = Z * self.feature_weights_
         codes = self.hasher_.transform(Z, chunk_size=self.chunk_size)
         s = self.scorer_.score(codes)
         self.diagnostics_["scoring"] = self.scorer_.diagnostics_
@@ -205,6 +234,9 @@ class LeadX:
             "prior": self.scorer_.prior_,
             "chunk_size": self.chunk_size,
             "encoder": self.encoder_.to_dict(),
+            "feature_weighting": self.feature_weighting,
+            "feature_weights": None if self.feature_weights_ is None
+            else self.feature_weights_.tolist(),
             "polars_version": pl.__version__,
         }
         (path / "meta.json").write_text(json.dumps(meta))
@@ -217,10 +249,13 @@ class LeadX:
         clf = cls(
             mode=meta["mode"], tune=False, n_bits=cfg["n_bits"],
             n_tables=cfg["n_tables"], m=cfg["m"], strategy=cfg["strategy"],
-            weights=cfg["weights"], chunk_size=meta["chunk_size"],
+            weights=cfg["weights"], feature_weighting=meta.get("feature_weighting", "none"),
+            chunk_size=meta["chunk_size"],
         )
         clf.config_ = cfg
         clf.tuning_results_ = None
+        fw = meta.get("feature_weights")
+        clf.feature_weights_ = None if fw is None else np.asarray(fw, dtype=np.float32)
         clf.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
         clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"))
         scorer = SeedScorer(

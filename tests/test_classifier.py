@@ -74,3 +74,34 @@ def test_save_load_roundtrip(tmp_path):
     loaded = LeadX.load(tmp_path / "model")
     np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)
     assert loaded.config_ == clf.config_
+
+
+def test_feature_weighting_downweights_noise_and_helps():
+    # 6 signal + 54 noise features — weighting ควรกู้ signal ที่ถูก noise กลบ
+    from sklearn.datasets import make_classification
+    X, y = make_classification(n_samples=6000, n_features=60, n_informative=6,
+                               n_redundant=0, n_repeated=0, class_sep=1.5,
+                               flip_y=0.01, shuffle=False, random_state=0)
+    Xtr, Xte, ytr, yte = X[:4000], X[4000:], y[:4000], y[4000:]
+    dtr = pl.DataFrame({f"f{i}": Xtr[:, i] for i in range(60)})
+    dte = pl.DataFrame({f"f{i}": Xte[:, i] for i in range(60)})
+    base = LeadX(mode="two_class", tune=False, n_bits=10, n_tables=20,
+                 random_state=0).fit(dtr, ytr.astype(float))
+    wtd = LeadX(mode="two_class", tune=False, n_bits=10, n_tables=20,
+                feature_weighting="corr", random_state=0).fit(dtr, ytr.astype(float))
+    auc_base = roc_auc_score(yte, base.predict_proba(dte)[:, 1])
+    auc_wtd = roc_auc_score(yte, wtd.predict_proba(dte)[:, 1])
+    assert auc_wtd > auc_base + 0.03  # weighting กู้ signal ที่ noise กลบ
+    # signal features (6 ตัวแรก, shuffle=False) ควรได้น้ำหนักเฉลี่ยสูงกว่า noise
+    w = wtd.feature_weights_
+    assert w[:6].mean() > 3 * w[6:].mean()
+
+
+def test_feature_weighting_persists_through_save_load(tmp_path):
+    df, y = _blobs_df(n_per=100)
+    clf = LeadX(mode="two_class", tune=False, n_bits=6, n_tables=3,
+                feature_weighting="corr", random_state=0).fit(df, y)
+    expected = clf.predict_proba(df)
+    clf.save(tmp_path / "m")
+    loaded = LeadX.load(tmp_path / "m")
+    np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)

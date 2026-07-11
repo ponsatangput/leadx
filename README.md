@@ -219,6 +219,24 @@ AUC (stratified 5-fold CV) เทียบ baselines — leadx เปิด auto
 2–6 AUC points บนข้อมูลที่ signal กระจายหรือ boundary โค้ง (two_moons) — trade-off
 ที่คาดไว้: แลกความแม่นกับความเรียบง่ายของโครงสร้าง (model = hash tables)
 
+## Noise features & `feature_weighting`
+
+จุดอ่อนเชิงโครงสร้างที่ใหญ่สุดของ hashing แบบ unsupervised: random projection คลุก
+*ทุก* feature เท่ากัน ถ้ามี noise features เยอะ collision จะสะท้อนความคล้ายเรื่อง noise
+→ AUC ทรุด (วัดจริง: signal 8 features คงที่ เติม noise จน D=200 → AUC 0.99→0.79)
+
+`feature_weighting="corr"` แก้ตรงนี้ — ถ่วง feature ตาม |corr กับ y| ก่อน hash:
+
+| D (8 signal + noise) | ดิบ | `feature_weighting="corr"` | HistGB |
+|---|---|---|---|
+| 50 | 0.927 | 0.974 | 0.990 |
+| 100 | 0.889 | 0.976 | 0.990 |
+| 200 | 0.791 | **0.973** | 0.989 |
+
+ปิด gap ไป ~95% ด้วยต้นทุนแทบเป็นศูนย์ (univariate corr). **ข้อแลกเปลี่ยน:** weights ใช้ y
+→ hash codes กลายเป็น task-specific → **ปิดการ reuse projections ข้ามโจทย์** จึง opt-in
+(default `"none"`): เปิดเมื่อต้องการ accuracy บน noisy data, ปิดเมื่อต้องการ reuse backbone
+
 ## Large + imbalanced data — อ่านตามจริง
 
 โจทย์ใหญ่ + positive หายาก (งาน lead scoring / fraud / churn) วัดด้วย **PR-AUC**
