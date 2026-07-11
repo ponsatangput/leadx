@@ -4,12 +4,47 @@
 
 Fast classification บนข้อมูลขนาดใหญ่ (ระดับ 10M rows) ด้วย **Locality-Sensitive Hashing (LSH)** + **seed-based bucket scoring** — เหมาะกับงาน lead scoring / PU ranking ที่มี positive ยืนยันไม่กี่ตัวแต่ข้อมูลมหาศาล
 
-แทนที่จะเรียนรู้ decision boundary แบบ model ทั่วไป `leadx` ใช้ LSH แบ่งข้อมูลเป็น bucket แล้วให้คะแนนแต่ละ bucket จากสัดส่วนของ "seeds" (ตัวอย่างที่มี label) ที่ตกลงไปในนั้น — ทำให้ **fit และ predict เป็น batch operation ล้วน** (matrix multiply + group-by) ไม่มี loop ต่อแถว จึง scale ได้ถึงหลักสิบล้านแถวในเวลาไม่กี่วินาที
+แทนที่จะเรียนรู้ decision boundary แบบ model ทั่วไป `leadx` ใช้ LSH แบ่งข้อมูลเป็น bucket แล้วให้คะแนนแต่ละ bucket จากสัดส่วนของ "seeds" (ตัวอย่างที่มี label) ที่ตกลงไปในนั้น — ทำให้ **fit และ predict เป็น batch operation ล้วน** (matrix multiply + group-by) ไม่มี loop ต่อแถว จึง scale ได้ถึงหลักสิบล้านแถวในเวลาไม่กี่วินาที เชิงทฤษฎีมันคือ **approximate soft-kNN**: bucket-density ในละแวกรหัสเดียวกัน ≈ soft kNN ที่แลกความแม่นของ neighbor จริงกับความเร็วของ hash lookup
 
 ```
 fit 20,000 seeds × 50 features → 0.4s
 predict 1,000,000 rows        → 1.4s
 ```
+
+## สารบัญ
+
+- [When to use leadx](#when-to-use-leadx) — เลือกให้ถูกงาน (สำคัญ อ่านก่อน)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [How it works](#how-it-works)
+- [Modes & options](#modes--options)
+- [Auto-tuning](#auto-tuning)
+- [Backbone reuse](#backbone-reuse--hash-ครั้งเดียว-หลายโจทย์)
+- [Diagnostics](#diagnostics)
+- [Save / Load](#save--load)
+- [API reference](#api-reference)
+- [Benchmarks](#benchmarks)
+- [Architecture](#architecture)
+- [Known limitations & failure modes](#known-limitations--failure-modes)
+- [Examples](#examples)
+- [Development](#development)
+
+---
+
+## When to use leadx
+
+leadx ไม่ใช่เครื่องมือทั่วไปที่ชนะทุกงาน — มันแลกความแม่นเล็กน้อยกับความเร็ว, ความเรียบง่ายของโครงสร้าง (model = hash tables), และความสามารถ reuse ข้ามโจทย์ ตัดสินใจตามตารางนี้:
+
+| สถานการณ์ | ใช้ leadx? |
+|---|---|
+| **PU learning** — มีแต่ positive ยืนยันแล้ว + unlabeled ไม่มี labeled negative | ✅ **ใช่** — boosting/LogReg รันไม่ได้เลย นี่คือ niche จริง |
+| **หลายโจทย์บน feature space เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวัน) | ✅ **ใช่** — `LeadXBackbone` hash ครั้งเดียว แต่ละโจทย์ ~30ms |
+| ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — model คือ dict lookup |
+| ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
+| **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
+| **imbalanced tabular** ที่มี labeled negatives | ❌ **ไม่** — boosting ชนะขาด (PR-AUC สูงกว่า ~3×) |
+
+รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
 
 ---
 
@@ -34,11 +69,9 @@ Dependencies: `numpy`, `polars`, `scikit-learn` (metrics เท่านั้�
 import polars as pl
 from leadx import LeadX
 
-# X เป็น Polars DataFrame (numeric และ/หรือ categorical columns)
-# y เป็น array ของ 0/1
-clf = LeadX(mode="two_class")   # auto-tune เปิดโดย default
+# X เป็น Polars DataFrame (numeric และ/หรือ categorical columns), y เป็น array ของ 0/1
+clf = LeadX(mode="two_class")           # auto-tune เปิดโดย default
 clf.fit(X_seed, y)
-
 proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(positive)
 ```
 
@@ -47,69 +80,72 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 ```python
 clf = LeadX(mode="pu")
 clf.fit(X_positive)                     # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
-
 scores = clf.score_samples(X_large)     # ranking score 0..1 (ไม่ใช่ probability)
+
+# มี background population (unlabeled) → score ดีกว่า (seed rate ต่อ bucket แทน log-density)
+clf.fit(X_positive, background=X_unlabeled)
 ```
 
-ถ้ามี background population (unlabeled) ส่งเข้ามาด้วยจะได้ score ที่คุณภาพดีกว่า (seed rate ต่อ bucket แทน log-density):
+### Noisy data (feature ที่ไม่เกี่ยวเยอะ) → เปิด feature weighting
 
 ```python
-clf.fit(X_positive, background=X_unlabeled)
+clf = LeadX(mode="two_class", feature_weighting="corr")   # ถ่วง feature ตาม |corr กับ y|
+clf.fit(X_seed, y)
+```
+
+### หลายโจทย์บน rows เดียว → backbone reuse
+
+```python
+from leadx import LeadXBackbone
+
+bb = LeadXBackbone(n_bits=16, n_tables=15).fit(X)   # hash ครั้งเดียว
+churn = bb.fit_task(y_churn)                         # ~30ms ต่อโจทย์
+fraud = bb.fit_task(y_fraud)
+churn.predict_proba(X_new)
 ```
 
 ---
 
-## แนวคิดของ algorithm
+## How it works
 
 ### 1. Encoding ด้วย random hyperplane (SimHash)
 
-สุ่ม projection vectors หลายตัว เอาไป dot กับข้อมูลแต่ละแถว แล้วเก็บ **sign** ของผลลัพธ์เป็น bit:
+สุ่ม projection vectors หลายตัว dot กับข้อมูลแต่ละแถว เก็บ **sign** เป็น bit:
 
 ```
 bit_j(x) = 1 if (x · p_j) > 0 else 0
 ```
 
-`B` bits ต่อกันเป็นรหัส bucket หนึ่งตัว (uint64) — จุดที่อยู่ใกล้กันใน feature space มีโอกาสสูงที่จะได้รหัสเดียวกัน (collision probability = `1 − θ/π` เมื่อ θ คือมุมระหว่างสองจุด)
+`B` bits ต่อกันเป็นรหัส bucket (uint64) — คู่จุดที่ทำมุม θ กันชนกัน (ได้ bit เดียวกัน) ด้วยความน่าจะเป็น `1 − θ/π` จุดใกล้กันจึงมีโอกาสสูงที่จะได้รหัสเดียวกัน
 
-### 2. Ensemble ของ hash tables
+### 2. Ensemble ของ K hash tables
 
-ทำซ้ำ `K` ชุด (K tables) ด้วย projection vectors คนละชุด — จุดที่ "ซวย" ถูกระนาบสุ่มผ่ากลางกลุ่มใน table หนึ่ง ยังมีโอกาสอยู่ bucket ที่ถูกใน table อื่น คะแนนสุดท้ายเฉลี่ยข้ามทุก table เพื่อลด variance
+table เดียวหยาบมาก (แต่ละ bucket คือกรวยกว้างผ่าน feature space) — **K tables ต่างหากที่กู้ resolution กลับมา**: สัดส่วน table ที่คู่จุดชนกัน = ตัวประมาณแบบ smooth ของ `(1 − θ/π)^B` → ensemble แปลง partition หยาบหลายอันให้เป็น **similarity kernel ต่อเนื่อง** (นี่คือ soft-kNN) คะแนนสุดท้ายเฉลี่ยข้ามทุก table
 
 ### 3. Seed-based scoring
 
-Seeds (ข้อมูลมี label) ถูก hash ลง bucket → แต่ละ bucket เก็บสถิติ `(n_positive, n_total)` เท่านั้น (ไม่เก็บรายชื่อสมาชิก จึงเล็กมาก) คะแนนของ bucket ใช้ **m-estimate smoothing** เพื่อกัน bucket ที่มี seed น้อยได้คะแนนสุดโต่ง:
+Seeds (ข้อมูลมี label) hash ลง bucket → แต่ละ bucket เก็บสถิติ `(n_positive, n_total)` เท่านั้น (ไม่เก็บสมาชิก จึงเล็กมาก — 10M seeds → ตารางไม่กี่แสนแถว) คะแนน bucket ใช้ **m-estimate smoothing**:
 
 ```
 score(bucket) = (n_pos + m·π) / (n_total + m)
 ```
 
-โดย π = สัดส่วน positive ทั้งชุด, m = smoothing strength — bucket ที่มี seeds มากคะแนนวิ่งเข้าหาสัดส่วนจริง, bucket ที่มี seeds น้อยถูกดึงเข้าหา prior
+π = สัดส่วน positive ทั้งชุด, m = smoothing strength — bucket ที่มี seeds มากคะแนนวิ่งเข้าหาสัดส่วนจริง, bucket ที่มี seeds น้อยถูกดึงเข้าหา prior (กันคะแนนสุดโต่งที่เป็นแหล่ง variance หลัก)
+
+**แถวที่ตก bucket ไม่มี seed** → multi-probe (มอง bucket เพื่อนบ้าน Hamming-1) → prior fallback
 
 ---
 
-## จุดที่ library แก้จากวิธีดั้งเดิม
+## Modes & options
 
-| ปัญหาเดิม | ทางแก้ |
-|---|---|
-| **Tune ยาก** — ต้องสุ่ม vectors หลายรอบกว่าจะได้ชุดที่กระจายตัวดี | `ProjectionBank` คัด vectors อัตโนมัติตามเกณฑ์วัดได้ 5 ข้อ + resample ให้เองจนพอ |
-| **เลือกจำนวน bits/tables ไม่มีหลัก** | `Tuner` หา config ที่ดีที่สุดจาก out-of-fold validation — ประเมินทั้ง grid จากการ hash **ครั้งเดียว** (nested prefix masking) |
-| **Categorical features ใช้ไม่ได้** | `FeatureEncoder` เลือก one-hot / feature hashing อัตโนมัติตาม cardinality |
-| **Bucket ไม่มี seed → ไม่มีคะแนน** | Multi-probe (มอง bucket เพื่อนบ้าน Hamming-1) → prior fallback |
-| **Bucket seed น้อย → คะแนนสุดโต่ง** | m-estimate smoothing |
-
----
-
-## เกณฑ์ "ชุด vectors ที่ดี" (ProjectionBank)
-
-`ProjectionBank` คัด projections โดยวัดจากข้อมูลจริง (บน sample ~100k แถว) — เปลี่ยนจาก "สุ่มแล้วลุ้น" เป็น "คัดอัตโนมัติรอบเดียว":
-
-1. **Bit balance** — แต่ละ bit ต้องผ่าข้อมูลใกล้ครึ่งๆ (minority ≥ 40%) ไม่งั้น bit นั้นแทบไม่มี information
-2. **Bit redundancy** — bits คู่ใดก็ตามต้องไม่ correlated เกิน (|ρ| < 0.3) วัดบนข้อมูลจริง ไม่ใช่แค่มุมระหว่าง vectors
-3. **Bucket distribution** — effective bucket count (perplexity) สูง ไม่มี mega-bucket กลืนข้อมูลครึ่งชุด
-4. **Table diversity** — partitions ของแต่ละ table ต้องต่างกันพอ (NMI ต่ำ)
-5. **[supervised mode]** Information gain ต่อ bit เทียบ label — วัดแบบ **cross-fitted** เพื่อกัน overfit; ถ้า seeds < 50/class จะ refuse แล้ว fallback เป็น unsupervised
-
-> ⚠️ **Contract:** `ProjectionBank` คาดหวัง input ที่ **centered/standardized แล้ว** — `LeadX` ทำให้ผ่าน `FeatureEncoder` โดยอัตโนมัติ ถ้าเรียก `ProjectionBank` ตรงๆ ด้วยข้อมูลที่ mean เบ้ เกณฑ์ balance จะ anti-select ทิศทางที่มี offset และคะแนนจะเสียหายรุนแรง (จะมี warning เตือน)
+| option | ค่า | ความหมาย |
+|---|---|---|
+| `mode` | `"two_class"` / `"pu"` | label สองฝั่ง / positive-unlabeled |
+| `strategy` | `"unsupervised"` (default) / `"supervised"` | คัด projection vectors แบบไม่ใช้ / ใช้ label (auto-tune ลองทั้งคู่) |
+| `weights` | `"mean"` (default) / `"coverage"` | รวม score ข้าม tables แบบเฉลี่ยตรง / ถ่วงให้ table ที่ miss เยอะพูดเบาลง |
+| `feature_weighting` | `"none"` (default) / `"corr"` | ถ่วง feature ตาม \|corr กับ y\| ก่อน hash (แก้ noise dilution; two_class เท่านั้น; ปิด reuse) |
+| `m` | float (default 10) | smoothing strength |
+| `chunk_size` | int (default 1M) | ขนาด chunk ตอน predict — คุม peak memory |
 
 ---
 
@@ -118,23 +154,41 @@ score(bucket) = (n_pos + m·π) / (n_total + m)
 ```python
 clf = LeadX(mode="two_class", tune=True)   # default
 clf.fit(X_seed, y)
-
 clf.config_            # config ที่ชนะ: {strategy, n_bits, n_tables, m, weights}
 clf.tuning_results_    # Polars DataFrame — ทุก config เรียงตาม OOF score
 ```
 
 **Trick ที่ทำให้ tuning เร็ว:** hash ด้วย `B_max` bits และ `K_max` tables เพียงครั้งเดียว แล้ว
 
-- **จำนวน bits น้อยลง** = mask เอา prefix bits (`code >> shift`) — bits ถูกเรียงจากคุณภาพสูงสุดไว้แล้ว
-- **จำนวน tables น้อยลง** = ใช้ subset แรก
+- **n_bits น้อยลง** = mask เอา prefix bits (`code >> shift`) — bits เรียงจากคุณภาพสูงสุดไว้แล้ว
+- **n_tables น้อยลง** = ใช้ subset แรก
 
-ดังนั้นการลอง 100 configs มีต้นทุนแทบเท่าลอง 1 config
-
-ปิด auto-tune แล้วกำหนดเองก็ได้:
+การลอง 100 configs จึงมีต้นทุนแทบเท่าลอง 1 config ปิด auto-tune แล้วกำหนดเองได้:
 
 ```python
 clf = LeadX(tune=False, n_bits=14, n_tables=10, m=10.0)
 ```
+
+---
+
+## Backbone reuse — hash ครั้งเดียว, หลายโจทย์
+
+จุดแข็งเชิงสถาปัตยกรรมที่ boosting เลียนแบบไม่ได้: projections เป็น **y-independent** → encode+project+hash ครั้งเดียว แล้วแต่ละ labeling ใหม่เหลือแค่ group-by บน codes ที่ cache ไว้
+
+```python
+from leadx import LeadXBackbone
+
+bb = LeadXBackbone(n_bits=16, n_tables=15, random_state=0).fit(X)   # แพงครั้งเดียว
+churn = bb.fit_task(y_churn)                    # ~30ms — คืน TaskModel
+fraud = bb.fit_task(y_fraud)
+leads = bb.fit_task(mode="pu", seeds=X_pos, background=X)
+churn.predict_proba(X_new)                      # re-hash rows ใหม่ผ่าน projections ร่วม
+bb.save(path); LeadXBackbone.load(path)         # แชร์ projections ข้ามทีม/เวลา
+```
+
+per-task ปรับ granularity ได้ถูกๆ: `fit_task(y, n_bits=b, n_tables=k)` โดย `b ≤` backbone (prefix mask) และ `k ≤` backbone (subset) — ไม่ต้อง re-hash
+
+**ข้อแลก:** backbone ใช้ unsupervised projections เท่านั้น → ใช้ `feature_weighting` ไม่ได้ (weights ใช้ y → codes task-specific → ปิด reuse) เลือกอย่างใดอย่างหนึ่งตาม use case
 
 ---
 
@@ -145,7 +199,7 @@ clf.diagnostics_["projections"]   # balance, redundancy, n_eff, diversity ต่
 clf.diagnostics_["scoring"]       # miss_rate_join, miss_rate_final (หลัง predict)
 ```
 
-ถ้า `miss_rate_final > 30%` จะมี warning — สัญญาณว่า `n_bits` มากไป (bucket ละเอียดจนว่าง) หรือ seeds น้อยไป
+`miss_rate_final > 30%` → warning (สัญญาณว่า `n_bits` มากไปจน bucket ว่าง หรือ seeds น้อยไป)
 
 ---
 
@@ -154,59 +208,65 @@ clf.diagnostics_["scoring"]       # miss_rate_join, miss_rate_final (หลั�
 ```python
 clf.save("model_dir")               # projections.npy + tables.parquet + meta.json
 clf2 = LeadX.load("model_dir")
+
+bb.save("backbone_dir")             # projections.npy + seed_codes.npy + meta.json
+bb2 = LeadXBackbone.load("backbone_dir")
 ```
 
-> Caveat: hashed categorical ใช้ polars hash — โหลดข้าม polars major version อาจได้ hash ต่างกัน (version บันทึกไว้ใน `meta.json`)
+> Caveat: hashed categorical ใช้ polars hash — โหลดข้าม polars major version อาจได้ hash ต่างกัน (version บันทึกใน `meta.json`)
 
 ---
 
-## Public API
+## API reference
 
-| Method | คำอธิบาย |
+### `LeadX` — facade โจทย์เดียวจบ
+
+```python
+LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
+      strategy="unsupervised", weights="mean", grid=None,
+      feature_weighting="none", chunk_size=1_000_000, random_state=0)
+```
+
+| method / attr | คำอธิบาย |
 |---|---|
-| `LeadX(mode, tune, n_bits, n_tables, m, strategy, weights, grid, chunk_size, random_state)` | constructor |
-| `.fit(df, y=None, background=None)` | train; PU mode ไม่ต้องส่ง y |
-| `.predict_proba(df)` | `(n, 2)` — two_class เท่านั้น |
-| `.score_samples(df)` | ranking score `(n,)` — ใช้ได้ทั้งสอง mode |
-| `.save(path)` / `.load(path)` | serialize / deserialize |
-| `.config_`, `.tuning_results_`, `.diagnostics_` | fitted attributes |
+| `.fit(df, y=None, background=None)` | train; PU ไม่ต้องส่ง y; background สำหรับ PU |
+| `.predict_proba(df) → (n, 2)` | class probability — two_class เท่านั้น |
+| `.score_samples(df) → (n,)` | ranking score — ทั้งสอง mode |
+| `.save(path)` / `LeadX.load(path)` | serialize / deserialize |
+| `.config_` | config ที่ใช้จริงหลัง fit |
+| `.tuning_results_` | Polars DataFrame ทุก config (None ถ้า tune=False) |
+| `.diagnostics_` | projection quality + scoring miss rate |
+| `.feature_weights_` | น้ำหนักต่อ feature (None ถ้า feature_weighting="none") |
 
-**Parameters สำคัญ:**
+### `LeadXBackbone` — hash ครั้งเดียว reuse หลายโจทย์
 
-- `mode`: `"two_class"` (label สองฝั่ง) หรือ `"pu"` (positive-unlabeled)
-- `strategy`: `"unsupervised"` (default) หรือ `"supervised"` (คัด bits ด้วย label; auto-tune ลองทั้งคู่)
-- `weights`: `"mean"` (เฉลี่ยตรงๆ) หรือ `"coverage"` (table ที่ miss เยอะพูดเบาลง)
-- `chunk_size`: ขนาด chunk ตอน predict (default 1M) — คุม peak memory
-
----
-
-## Architecture
-
-Modular core + thin facade — ทุก component ทดสอบแยกได้:
-
-```
-LeadX (facade)
-    │
-    ├── FeatureEncoder    numeric standardize + categorical (one-hot / hashing)
-    ├── ProjectionBank    คัด projection vectors ตามเกณฑ์ 5 ข้อ
-    ├── HashEnsemble      Z @ P → sign → bit-pack เป็น uint64 (K tables)
-    ├── SeedScorer        bucket → score (Polars), multi-probe, PU/two-class
-    └── Tuner             nested prefix-masked OOF grid search
+```python
+LeadXBackbone(n_bits=16, n_tables=15, random_state=0, chunk_size=1_000_000)
 ```
 
+| method / attr | คำอธิบาย |
+|---|---|
+| `.fit(df)` | encode + unsupervised projections + cache seed codes |
+| `.fit_task(y=None, mode="two_class", m=10.0, weights="mean", n_bits=None, n_tables=None, seeds=None, background=None) → TaskModel` | สร้างโมเดลต่อโจทย์จาก cached codes (ถูกมาก) |
+| `.transform(df) → (n, n_tables) uint64` | hash rows ใหม่ผ่าน projections เดิม |
+| `.save(path)` / `LeadXBackbone.load(path)` | serialize / deserialize |
+| `.diagnostics_` | projection quality |
+
+### `TaskModel` — โมเดลต่อโจทย์ (คืนจาก `fit_task`)
+
+| method / attr | คำอธิบาย |
+|---|---|
+| `.predict_proba(df) → (n, 2)` | two_class เท่านั้น |
+| `.score_samples(df) → (n,)` | ทั้งสอง mode |
+| `.backbone` | reference ไป backbone ที่แชร์ projections |
+
 ---
 
-## Limitations (v1)
+## Benchmarks
 
-- ยังไม่รองรับ multi-class (> 2 classes) — โครงสร้าง score ต่อ bucket ขยายได้แต่ยังไม่ทำ
-- ยังไม่มี GPU / out-of-core (แต่ chunked predict รองรับข้อมูลใหญ่กว่า RAM ได้บางส่วน)
-- Data-dependent projections ขั้นสูง (ITQ / PCA-rotate) เป็นทิศทาง v2
+### Accuracy vs other algorithms (5-fold CV AUC)
 
----
-
-## Accuracy vs other algorithms
-
-AUC (stratified 5-fold CV) เทียบ baselines — leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
+leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 
 | dataset | leadx | HistGradBoost | RandomForest | kNN | LogReg |
 |---|---|---|---|---|---|
@@ -215,32 +275,9 @@ AUC (stratified 5-fold CV) เทียบ baselines — leadx เปิด auto
 | two_moons (non-linear) | 0.913 | 0.984 | 0.980 | **0.986** | 0.943 |
 | synthetic hard | 0.860 | **0.926** | 0.925 | 0.902 | 0.834 |
 
-**สรุป:** leadx แข่งได้สูสีบน dataset ที่แยกได้ดี (breast_cancer) แต่ตามหลัง tree-based
-2–6 AUC points บนข้อมูลที่ signal กระจายหรือ boundary โค้ง (two_moons) — trade-off
-ที่คาดไว้: แลกความแม่นกับความเรียบง่ายของโครงสร้าง (model = hash tables)
+สูสีบน dataset ที่แยกได้ดี ตามหลัง tree-based 2–6 points บนข้อมูล signal กระจาย/boundary โค้ง
 
-## Noise features & `feature_weighting`
-
-จุดอ่อนเชิงโครงสร้างที่ใหญ่สุดของ hashing แบบ unsupervised: random projection คลุก
-*ทุก* feature เท่ากัน ถ้ามี noise features เยอะ collision จะสะท้อนความคล้ายเรื่อง noise
-→ AUC ทรุด (วัดจริง: signal 8 features คงที่ เติม noise จน D=200 → AUC 0.99→0.79)
-
-`feature_weighting="corr"` แก้ตรงนี้ — ถ่วง feature ตาม |corr กับ y| ก่อน hash:
-
-| D (8 signal + noise) | ดิบ | `feature_weighting="corr"` | HistGB |
-|---|---|---|---|
-| 50 | 0.927 | 0.974 | 0.990 |
-| 100 | 0.889 | 0.976 | 0.990 |
-| 200 | 0.791 | **0.973** | 0.989 |
-
-ปิด gap ไป ~95% ด้วยต้นทุนแทบเป็นศูนย์ (univariate corr). **ข้อแลกเปลี่ยน:** weights ใช้ y
-→ hash codes กลายเป็น task-specific → **ปิดการ reuse projections ข้ามโจทย์** จึง opt-in
-(default `"none"`): เปิดเมื่อต้องการ accuracy บน noisy data, ปิดเมื่อต้องการ reuse backbone
-
-## Large + imbalanced data — อ่านตามจริง
-
-โจทย์ใหญ่ + positive หายาก (งาน lead scoring / fraud / churn) วัดด้วย **PR-AUC**
-(สำคัญกว่า ROC-AUC บน imbalanced) — [examples/large_imbalanced.py](examples/large_imbalanced.py):
+### Large + imbalanced (PR-AUC — เหมาะ imbalanced กว่า ROC-AUC)
 
 | train / test | metric | **leadx** | HistGradBoost | LogReg |
 |---|---|---|---|---|
@@ -248,39 +285,21 @@ AUC (stratified 5-fold CV) เทียบ baselines — leadx เปิด auto
 | 500k / 1M (1% pos) | PR-AUC | 0.23 | **0.50** | 0.20 |
 | 500k / 1M | fit time | 18s | **2s** | 0.2s |
 
-> ⚠️ **บน imbalanced tabular ที่มี labeled negatives — gradient boosting ชนะขาด**
-> (PR-AUC สูงกว่า ~3× และ fit เร็วกว่า). leadx **ไม่ใช่**เครื่องมือที่เหมาะกับโจทย์นี้
+> ⚠️ บน imbalanced ที่มี labeled negatives — **gradient boosting ชนะขาด** leadx niche จริงคือ **PU** (ไม่มี labeled negative ให้ boosting ใช้): จัดอันดับ rare positives ได้ PR-AUC 0.23 **เท่ากับตอนมี label ครบ** เพราะ density approach เป็น PU โดยธรรมชาติ
 
-**แล้ว leadx คุ้มตรงไหน?** — niche จริงคือ **PU learning**: มีแต่ positive ยืนยันแล้ว +
-unlabeled ไม่มี labeled negative เลย (boosting/LogReg รันไม่ได้). ในโหมดนี้ leadx จัดอันดับ
-rare positives ได้ **PR-AUC 0.23 เท่ากับตอนมี label ครบ** — คือ density approach ของมัน
-เป็น PU โดยธรรมชาติ ใช้ negative labels น้อยมาก:
+### Noise features & `feature_weighting`
 
-```
-leadx PU: PR-AUC=0.233 (baseline 0.015) | fit=0.9s | seeds=7,471 positives เท่านั้น
-```
+signal 8 features คงที่ เติม noise จน D โต:
 
-**บรรทัดสุดท้ายแบบซื่อตรง:** ถ้ามี label ครบและเป็น two-class → ใช้ gradient boosting.
-เลือก leadx เมื่อ (1) เป็น PU ไม่มี labeled negative, หรือ (2) ต้อง deploy เป็น hash
-table ธรรมดาไม่มี model server. predict เร็วจริง แต่ "เร็วกว่า kNN" ไม่ใช่ "เร็วกว่า boosting"
+| D | leadx ดิบ | `feature_weighting="corr"` | HistGB |
+|---|---|---|---|
+| 50 | 0.927 | 0.974 | 0.990 |
+| 100 | 0.889 | 0.976 | 0.990 |
+| 200 | 0.791 | **0.973** | 0.989 |
 
-## Backbone reuse — hash ครั้งเดียว, หลายโจทย์
+feature weighting ปิด gap ~95% ด้วยต้นทุนแทบศูนย์ (แต่ปิด reuse — ดู [failure modes](#known-limitations--failure-modes))
 
-จุดแข็งเชิงสถาปัตยกรรมที่ boosting เลียนแบบไม่ได้: projections เป็น **y-independent** →
-encode+project+hash ครั้งเดียว แล้วแต่ละ labeling ใหม่เหลือแค่ group-by บน codes ที่ cache ไว้
-
-```python
-from leadx import LeadXBackbone
-
-bb = LeadXBackbone(n_bits=16, n_tables=15, random_state=0).fit(X)   # แพงครั้งเดียว
-churn = bb.fit_task(y_churn)                    # ~30ms — TaskModel
-fraud = bb.fit_task(y_fraud)
-leads = bb.fit_task(mode="pu", seeds=X_pos, background=X)
-churn.predict_proba(X_new)                      # re-hash rows ใหม่ผ่าน projections ร่วม
-bb.save(path); LeadXBackbone.load(path)         # แชร์ projections ข้ามทีม/เวลา
-```
-
-วัดจริง (200k rows × 40 features, 6 โจทย์บน rows เดียว):
+### Backbone reuse (200k × 40 features, 6 โจทย์บน rows เดียว)
 
 | | เวลา | AUC |
 |---|---|---|
@@ -288,27 +307,49 @@ bb.save(path); LeadXBackbone.load(path)         # แชร์ projections ข�
 | `fit_task` (ต่อโจทย์) | **36ms** | 0.94–0.97 |
 | HistGradBoost (fit เต็มต่อโจทย์) | 1.3s | 0.996 |
 
-boosting เทรนใหม่ทั้งต้นทุกครั้งที่ y เปลี่ยน (tree splits ขึ้นกับ y) — leadx จ่าย hash
-ครั้งเดียวแล้ว marginal cost ต่อโจทย์แทบเป็นศูนย์ **คุ้มเมื่อมีโจทย์เยอะบน feature space
-เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวันด้วย label ที่อัปเดต). ข้อแลก:
-backbone ใช้ unsupervised projections → ใช้ `feature_weighting` ไม่ได้ (แลก accuracy กับ reuse)
+boosting เทรนใหม่ทั้งต้นทุกครั้งที่ y เปลี่ยน — leadx marginal cost ต่อโจทย์แทบเป็นศูนย์
+
+---
+
+## Architecture
+
+Modular core + thin facade — ทุก component ทดสอบแยกได้:
+
+```
+LeadX (facade โจทย์เดียว)         LeadXBackbone (reuse หลายโจทย์)
+    │                                 │  ├── fit() → cache codes
+    ├── FeatureEncoder    numeric standardize + categorical (one-hot / hashing)
+    ├── ProjectionBank    คัด projection vectors ตามเกณฑ์ (unsupervised/supervised)
+    ├── HashEnsemble      Z @ P → sign → bit-pack เป็น uint64 (K tables); prefix-mask
+    ├── SeedScorer        bucket → score (Polars), multi-probe, PU/two-class
+    └── Tuner             nested prefix-masked OOF grid search
+```
+
+---
+
+## Known limitations & failure modes
+
+จุดอ่อนที่ **วัดจริงแล้ว** (รายละเอียด + ตัวเลขเต็มใน [DESIGN_NOTES.md](DESIGN_NOTES.md)):
+
+1. **Noise-feature dilution (เพดาน accuracy จริง)** — random projection คลุกทุก feature เท่ากัน; noise เยอะ → AUC ทรุด (0.99→0.79 เมื่อ D=8→200) แก้ด้วย `feature_weighting="corr"` (แลก reuse) หรือใช้ boosting
+2. **Coverage collapse ในมิติสูง** — B มากไป → bucket ว่าง → miss rate พุ่ง → score หล่นเป็น prior (จัดการได้ด้วย tuner ที่เลือก B ในโซนปลอดภัย)
+3. **Seed ต้องเป็นตัวแทน distribution จริง** — score = density ratio; selection bias / covariate shift ทำให้เพี้ยน (miss rate ช่วยตรวจ shift)
+4. **Calibration** — score เป็น ranking ที่ monotone-ish ไม่ใช่ P(y|x) จริง (ดีสำหรับ AUC/AP; ถ้าต้อง probability ให้ต่อ isotonic บน OOF)
+5. **ยังไม่รองรับ** multi-class (>2), GPU/out-of-core, data-dependent projections (ITQ/PCA) — เป็นทิศทาง v2
+
+---
 
 ## Examples
 
 ```bash
 uv run python examples/worked_example.py   # end-to-end: categorical + missing → fit/tune/predict/diagnostics/save-load
-uv run python examples/benchmark.py        # AUC + เวลา เทียบ kNN / LightGBM หลายขนาดข้อมูล
+uv run python examples/benchmark.py        # AUC + เวลา เทียบ kNN หลายขนาดข้อมูล
 uv run python examples/auc_comparison.py   # AUC เทียบ 5 algorithms บน 4 dataset (5-fold CV)
 uv run python examples/large_imbalanced.py # large + imbalanced: PR-AUC + PU niche demo
 uv run python examples/backbone_reuse.py   # hash ครั้งเดียว, reuse หลายโจทย์ (~30ms/โจทย์)
 ```
 
-`worked_example.py` สาธิต workflow เต็มบนข้อมูลลูกค้าสังเคราะห์ที่มีทั้ง numeric,
-categorical (one-hot + hashing) และ missing values ทั้ง two-class และ PU
-
-`benchmark.py` แสดง trade-off ของ leadx — บนข้อมูลสังเคราะห์ 200k→1M แถว leadx
-predict เสร็จในหลักวินาที ส่วน exact kNN ทำไม่ไหว (predict เป็น O(n_train·n_test));
-ความแม่นมักต่ำกว่า gradient boosting เล็กน้อย แลกกับความเร็วและ memory footprint
+---
 
 ## Development
 
@@ -317,4 +358,6 @@ uv run pytest tests/ -m "not slow"   # unit + property + integration (เร็�
 uv run pytest tests/ -m slow -s      # 1M-row scale test
 ```
 
-เอกสารออกแบบ: [`docs/superpowers/specs/2026-07-10-leadx-design.md`](../../../docs/superpowers/specs/2026-07-10-leadx-design.md)
+เอกสารเพิ่มเติม:
+- [DESIGN_NOTES.md](DESIGN_NOTES.md) — failure modes, design tensions, สิ่งที่วัดจริง
+- [design spec](../../../docs/superpowers/specs/2026-07-10-leadx-design.md) — สเปกออกแบบเดิม
