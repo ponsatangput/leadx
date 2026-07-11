@@ -105,3 +105,22 @@ def test_feature_weighting_persists_through_save_load(tmp_path):
     clf.save(tmp_path / "m")
     loaded = LeadX.load(tmp_path / "m")
     np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)
+
+
+def test_pu_scores_batch_invariant():
+    # bug: min-max normalize ด้วยสถิติของ batch → แถวเดียวกันได้ score ต่างกันตาม batch
+    rng = np.random.default_rng(2)
+    pos = rng.standard_normal((200, 5)) + 2.0
+    df_pos = pl.DataFrame({f"f{i}": pos[:, i] for i in range(5)})
+    Xq = np.vstack([rng.standard_normal((300, 5)), pos[:50]])
+    df_q = pl.DataFrame({f"f{i}": Xq[:, i] for i in range(5)})
+    clf = LeadX(mode="pu", tune=False, n_bits=6, n_tables=4, random_state=0).fit(df_pos)
+    whole = clf.score_samples(df_q)
+    halves = np.concatenate([clf.score_samples(df_q[:100]), clf.score_samples(df_q[100:])])
+    np.testing.assert_allclose(whole, halves, rtol=1e-9)
+
+
+def test_two_class_rejects_single_class_y():
+    df, _ = _blobs_df(n_per=30)
+    with pytest.raises(ValueError, match="class"):
+        LeadX(mode="two_class", tune=False, n_bits=4, n_tables=2).fit(df, np.ones(60))

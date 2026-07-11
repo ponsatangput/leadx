@@ -12,7 +12,7 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble
 from .projections import ProjectionBank
-from .scoring import SeedScorer
+from .scoring import SeedScorer, normalize_pu, pu_score_range
 from .tuning import Tuner
 
 
@@ -113,6 +113,10 @@ class LeadX:
         if self.mode == "two_class" and y is None:
             raise ValueError("two_class ต้องการ y")
         y = np.ones(n) if (self.mode == "pu" and y is None) else np.asarray(y, dtype=np.float64)
+        if self.mode == "two_class" and len(np.unique(y)) < 2:
+            raise ValueError(
+                "two_class ต้องมี y ครบทั้งสอง class — ถ้ามีแต่ positive ใช้ mode='pu'"
+            )
         self.encoder_ = FeatureEncoder().fit(df)
         Z = self.encoder_.transform(df)
         # feature weighting (หลัง standardize มิฉะนั้นถูก z-score หักล้าง) — แก้ noise
@@ -145,6 +149,12 @@ class LeadX:
         self.scorer_ = SeedScorer(
             mode=self.mode, m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
         ).fit(codes, y, background_codes=bg_codes)
+        # PU calibration: normalize ด้วยค่าคงที่จาก fit (batch-invariant) — spec ห้าม
+        # ใช้ min/max ของ batch ที่กำลัง score
+        if self.mode == "pu":
+            self._pu_lo, self._pu_span = pu_score_range(self.scorer_, codes, bg_codes)
+        else:
+            self._pu_lo, self._pu_span = None, None
         self.diagnostics_ = {"projections": bank.diagnostics(), "config": cfg}
         return self
 
@@ -187,8 +197,7 @@ class LeadX:
                 "ลองลด n_bits หรือเพิ่ม seeds"
             )
         if self.mode == "pu":
-            span = s.max() - s.min()
-            s = (s - s.min()) / span if span > 0 else np.zeros_like(s)
+            s = normalize_pu(s, self._pu_lo, self._pu_span)
         return s
 
     def predict_proba(self, df: pl.DataFrame) -> np.ndarray:
@@ -235,6 +244,8 @@ class LeadX:
             "chunk_size": self.chunk_size,
             "encoder": self.encoder_.to_dict(),
             "feature_weighting": self.feature_weighting,
+            "pu_lo": self._pu_lo,
+            "pu_span": self._pu_span,
             "feature_weights": None if self.feature_weights_ is None
             else self.feature_weights_.tolist(),
             "polars_version": pl.__version__,
@@ -254,6 +265,10 @@ class LeadX:
         )
         clf.config_ = cfg
         clf.tuning_results_ = None
+        clf._pu_lo = meta.get("pu_lo")
+        clf._pu_span = meta.get("pu_span")
+        if meta["mode"] == "pu" and clf._pu_lo is None:
+            clf._pu_lo, clf._pu_span = 0.0, 1.0  # model เก่าก่อน batch-invariant fix
         fw = meta.get("feature_weights")
         clf.feature_weights_ = None if fw is None else np.asarray(fw, dtype=np.float32)
         clf.encoder_ = FeatureEncoder.from_dict(meta["encoder"])

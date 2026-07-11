@@ -18,7 +18,7 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, mask_codes
 from .projections import ProjectionBank
-from .scoring import SeedScorer
+from .scoring import SeedScorer, normalize_pu, pu_score_range
 
 
 class LeadXBackbone:
@@ -93,12 +93,25 @@ class LeadXBackbone:
         if mode == "two_class" and y is None:
             raise ValueError("two_class ต้องการ y")
         y = np.ones(n) if (mode == "pu" and y is None) else np.asarray(y, dtype=np.float64)
+        if len(y) != n:
+            raise ValueError(
+                f"ความยาว y ({len(y)}) ไม่ตรงกับจำนวนแถวของ seeds ({n}) — "
+                "ถ้า seeds=None y ต้องเรียงตาม rows ที่ใช้ fit backbone"
+            )
+        if mode == "two_class" and len(np.unique(y)) < 2:
+            raise ValueError(
+                "two_class ต้องมี y ครบทั้งสอง class — ถ้ามีแต่ positive ใช้ mode='pu'"
+            )
         bg_codes = None
         if background is not None:
             bg_codes = mask_codes(self.transform(background), b, self.n_bits)[:, :k]
         scorer = SeedScorer(mode=mode, m=m, weights=weights, n_bits=b).fit(
             seed_codes, y, background_codes=bg_codes)
-        return TaskModel(self, scorer, b, k, mode)
+        # PU calibration จาก fit (batch-invariant) — ดู scoring.pu_score_range
+        pu_lo, pu_span = (
+            pu_score_range(scorer, seed_codes, bg_codes) if mode == "pu" else (None, None)
+        )
+        return TaskModel(self, scorer, b, k, mode, pu_lo, pu_span)
 
     def save(self, path) -> None:
         path = Path(path)
@@ -129,12 +142,15 @@ class TaskModel:
     """โมเดลต่อโจทย์ที่ผูกกับ backbone — hash rows ใหม่ผ่าน projections ร่วม แล้ว score"""
 
     def __init__(self, backbone: LeadXBackbone, scorer: SeedScorer,
-                 n_bits: int, n_tables: int, mode: str):
+                 n_bits: int, n_tables: int, mode: str,
+                 pu_lo: float | None = None, pu_span: float | None = None):
         self.backbone = backbone
         self.scorer_ = scorer
         self.n_bits = n_bits
         self.n_tables = n_tables
         self.mode = mode
+        self._pu_lo = pu_lo
+        self._pu_span = pu_span
 
     def _codes(self, df: pl.DataFrame) -> np.ndarray:
         codes = self.backbone.transform(df)
@@ -144,8 +160,7 @@ class TaskModel:
         s = self.scorer_.score(self._codes(df))
         self.diagnostics_ = self.scorer_.diagnostics_
         if self.mode == "pu":
-            span = s.max() - s.min()
-            s = (s - s.min()) / span if span > 0 else np.zeros_like(s)
+            s = normalize_pu(s, self._pu_lo, self._pu_span)
         return s
 
     def predict_proba(self, df: pl.DataFrame) -> np.ndarray:

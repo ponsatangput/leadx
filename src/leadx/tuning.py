@@ -67,7 +67,13 @@ class Tuner:
         y = np.asarray(y, dtype=np.float64)
         rng = np.random.default_rng(self.random_state)
         if self.mode == "two_class":
-            n_folds = min(self.n_folds, int(np.bincount(y.astype(int)).min()))
+            min_class = int(np.bincount(y.astype(int)).min())
+            if min_class < 2:
+                raise ValueError(
+                    f"OOF tuning ต้องการ seeds อย่างน้อย 2 ต่อ class (class เล็กสุดมี "
+                    f"{min_class}) — ไม่งั้น train fold จะว่างเปล่า; เพิ่ม seeds หรือใช้ tune=False"
+                )
+            n_folds = min(self.n_folds, min_class)
         else:
             n_folds = min(self.n_folds, len(y))
         b_max = max(self.grid["n_bits"])

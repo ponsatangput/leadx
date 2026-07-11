@@ -100,6 +100,17 @@ score เฉลี่ยข้าม table + m-estimate เป็น ranking mon
 
 B มาก = bucket ละเอียด (แม่นขึ้น) แต่ coverage ต่ำ (miss เยอะ) — สองตัวดึงกันคนละทาง optimal B ขึ้นกับ #seeds + signal → เป็น bias-variance ที่ต้องจูน per-task (ทำได้ถูกด้วย prefix-mask บน cached codes)
 
+## 5.1 Methodology caveats (จาก code review — จดไว้ ยังไม่แก้)
+
+1. **`feature_weighting` leak เข้า auto-tune** — weights คำนวณจาก y ทั้งชุดก่อนส่ง Z เข้า
+   Tuner → validation folds เห็น y ของตัวเองผ่าน weights → `tuning_results_` optimistic
+   เล็กน้อย (เกรดเดียวกับ supervised-bank ที่จดใน comment ของ tuning.py) — แก้จริงต้อง
+   cross-fit weights ต่อ fold (v2)
+2. **PU tuner: background ใช้ทั้ง fit และ eval** — `cbg` สร้างตาราง (denominator) และเป็น
+   negative proxy ตอนวัด AP พร้อมกัน → bias เล็ก มีผลเมื่อ background เล็ก
+3. **coverage weights นับ `hit` จาก direct join ก่อน multi-probe** — table ที่ probe
+   ช่วยกู้ได้เยอะถูกถ่วงเท่า table ที่ miss จริง — เป็น design choice (ค่า conservative)
+
 ## 6. ทิศทางที่พักไว้ (พิจารณา v2)
 
 - **median-threshold hashing** — offset hashing (threshold = median ของ `w·x` แทนตัดที่ 0) → balanced bit โดยอัตโนมัติ, ลบ bit-test machinery, ไม่บิดข้อมูล (LSH ไม่จำเป็นต้องผ่าน origin)

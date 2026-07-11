@@ -3,6 +3,24 @@ import numpy as np
 import polars as pl
 
 
+def pu_score_range(scorer: "SeedScorer", *code_arrays) -> tuple[float, float]:
+    """คำนวณ (lo, span) ของ raw PU score จาก codes ตอน fit
+
+    ใช้เป็นค่าคงที่ normalize ตอน predict — ห้าม normalize ด้วย min/max ของ batch
+    ที่กำลัง score เพราะจะทำให้แถวเดียวกันได้ score ต่างกันตาม batch (batch-dependent)
+    """
+    parts = [scorer.score(c) for c in code_arrays if c is not None and len(c)]
+    s = np.concatenate(parts)
+    lo = float(s.min())
+    span = float(s.max()) - lo
+    return lo, (span if span > 0 else 1.0)
+
+
+def normalize_pu(s: np.ndarray, lo: float, span: float) -> np.ndarray:
+    """normalize PU score ด้วยค่าคงที่จาก fit → [0, 1] (clip ค่าที่เกินช่วง train)"""
+    return np.clip((s - lo) / span, 0.0, 1.0)
+
+
 class SeedScorer:
     """ให้คะแนน bucket จาก seeds แล้ว join กลับให้ข้อมูลใหม่ (Polars) (spec §6)
 

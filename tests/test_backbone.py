@@ -79,3 +79,22 @@ def test_backbone_save_load(tmp_path):
     loaded = LeadXBackbone.load(tmp_path / "bb")
     got = loaded.fit_task(y).predict_proba(df)
     np.testing.assert_allclose(got, expected, rtol=1e-6)
+
+
+def test_fit_task_rejects_mismatched_y_length():
+    df, y = _blobs_df(n_per=100)
+    bb = LeadXBackbone(n_bits=6, n_tables=3, random_state=0).fit(df)
+    with pytest.raises(ValueError, match="ความยาว|length|แถว"):
+        bb.fit_task(y[:150])  # 150 != 200 rows
+
+
+def test_pu_task_scores_batch_invariant():
+    rng = np.random.default_rng(1)
+    X = rng.standard_normal((400, 5))
+    df = pl.DataFrame({f"f{i}": X[:, i] for i in range(5)})
+    pos = pl.DataFrame({f"f{i}": (rng.standard_normal((150, 5)) + 1.5)[:, i] for i in range(5)})
+    bb = LeadXBackbone(n_bits=6, n_tables=4, random_state=0).fit(df)
+    task = bb.fit_task(mode="pu", seeds=pos, background=df)
+    whole = task.score_samples(df)
+    halves = np.concatenate([task.score_samples(df[:200]), task.score_samples(df[200:])])
+    np.testing.assert_allclose(whole, halves, rtol=1e-9)

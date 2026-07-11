@@ -115,14 +115,22 @@ class ProjectionBank:
     def _fit_table(self, S, y_s, rng) -> np.ndarray:
         # สุ่มเพิ่มเป็นรอบๆ จนมี candidates ผ่านเกณฑ์ balance พอ (แก้ปัญหา "สุ่มหลายรอบแล้วลุ้น"
         # ของข้อมูล anisotropic — ระบบ resample ให้เองแทนผู้ใช้)
+        # Memory bound: batch แรกเก็บเต็ม (เป็น pool ของ relax path) batch ถัดไปเก็บเฉพาะ
+        # ตัวที่ผ่าน balance — เดิม pathological case (15 batches × n_bits สูง) สะสม
+        # candidates ทั้งหมดจน matrix บวมระดับ GB
         C_parts, bits_parts, n_ok = [], [], 0
-        for _ in range(15):
+        for i in range(15):
             C_b = self._candidates(S.shape[1], rng)
             bits_b = (S @ C_b) > 0
             minority_b = np.minimum(bits_b.mean(axis=0), 1.0 - bits_b.mean(axis=0))
-            C_parts.append(C_b)
-            bits_parts.append(bits_b)
-            n_ok += int((minority_b >= self.balance_min).sum())
+            ok_b = minority_b >= self.balance_min
+            n_ok += int(ok_b.sum())
+            if i == 0:
+                C_parts.append(C_b)
+                bits_parts.append(bits_b)
+            else:
+                C_parts.append(C_b[:, ok_b])
+                bits_parts.append(bits_b[:, ok_b])
             if n_ok >= 3 * self.n_bits:
                 break
         C = np.hstack(C_parts)
@@ -143,8 +151,8 @@ class ProjectionBank:
         else:
             quality = minority
         order = ok[np.argsort(-quality[ok])]
-        Bc = bits.astype(np.float64)
-        Bc = (Bc - Bc.mean(axis=0)) / (Bc.std(axis=0) + 1e-12)
+        Bc = bits.astype(np.float32)  # float32 พอสำหรับ corr เกณฑ์ 0.3 — ลด memory ครึ่งหนึ่ง
+        Bc = (Bc - Bc.mean(axis=0)) / (Bc.std(axis=0) + np.float32(1e-7))
         selected: list[int] = []
         for i in order:
             if len(selected) == self.n_bits:

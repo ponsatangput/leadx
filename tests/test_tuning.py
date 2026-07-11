@@ -69,3 +69,11 @@ def test_pu_tuning_with_background_runs():
         pos, np.ones(200), Z_background=bg
     )
     assert best["score"] > 0.4  # AP ต้องดีกว่า random baseline (200/700 ≈ 0.29) ชัดเจน
+
+
+def test_tuner_raises_on_tiny_minority_class():
+    X, _ = _blobs(n_per=50)
+    y = np.zeros(100)
+    y[0] = 1.0  # minority มีตัวเดียว — เดิม n_folds=1 → train fold ว่าง → NaN crash ลึกๆ
+    with pytest.raises(ValueError, match="2"):
+        Tuner(grid=SMALL_GRID, mode="two_class").tune(X, y)
