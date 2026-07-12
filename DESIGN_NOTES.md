@@ -219,6 +219,23 @@ hash table) — หวังแก้ noise dilution แบบ unsupervised (ร
 dilution ต้องมี "ความรู้เรื่อง relevance" (feature_weighting ใช้ y) ไม่ใช่แค่ "ความหลากหลาย"
 — ไม่มีทางลัด unsupervised ง่ายๆ, tension accuracy↔reuse ยังอยู่ครบ
 
+## 7. Evolution summary — ปัญหา → การแก้ → ผล (บันทึกเส้นทางทั้งหมด)
+
+| ปัญหาที่พบ/หารือ | สิ่งที่ปรับ | ผลวัด |
+|---|---|---|
+| tune ยาก สุ่มหลายรอบแล้วลุ้น (pain point ตั้งต้น) | Tuner: nested prefix-masking, hash ครั้งเดียวทั้ง grid; final = prefix ของ bank ที่ประเมินจริง | 100+ configs ≈ ราคา 1 config |
+| เส้นตัดผ่าน origin + machinery สมมุติฐานเยอะ | `hash_mode="median"` + tie-aware threshold — ลบ balance-test/resample/redundancy ทั้งชุด | fit เร็ว 15x, robust, AUC เสมอเดิม (+0.001±0.015, 25 คู่) |
+| คะแนนดิบ vs สัดส่วน (คำถาม scoring) | `score_type="lift"` — density ratio, shrink-toward-1, fallback=1, agg mean/log | imbalance-invariant: แบนราบทุก ratio, ตัด HistGB ที่ ~0.3% |
+| noise features กลบ signal | `feature_weighting="corr"` (หลัง standardize เท่านั้น) | D=200: 0.79 → 0.97 |
+| one-hot ทั้ง 0/1 ตกฝั่งเดียวของ plane | `cat_bit_frac` type-aware bits + tuner เลือกสัดส่วน | cat-signal: 0.53 → 0.93; numeric ไม่ regress |
+| จูนครั้งเดียวใช้หลายโจทย์ | `LeadXBackbone` + `y_ref` shared weights | 30ms/โจทย์; related tasks +0.25 AUC |
+| bugs (batch-dependent PU, NaN, dead bits, config identity, tuner consistency) | fixes + 85 regression tests | ทุกข้อมี test คุม |
+
+**Top-3 การปรับที่มีค่าที่สุด:** (1) lift scoring — เปลี่ยน positioning ด้วยคณิตศาสตร์
+(2) type-aware bits — อุดรูรั่ว categorical (3) median/tie-aware hashing — ลบโค้ด
+มากกว่าเพิ่ม ได้ simplicity+robustness+speed พร้อมกัน — ทุกอันมาจากการหารือ ไม่ใช่
+textbook และผ่านด่านเดียวกัน: prototype → วัด → เข้า library เมื่อตัวเลขยืนยัน
+
 ## 6. ทิศทางที่พักไว้ (พิจารณา v3)
 
 - **PCA/ZCA whiten / ITQ** — แก้ anisotropy ให้เส้นสุ่มตัดตรงที่ข้อมูลอยู่จริง (พักเพราะเปลี่ยน data distribution)

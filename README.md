@@ -296,6 +296,19 @@ LeadXBackbone(n_bits=16, n_tables=15, hash_mode="median", cat_bit_frac="auto",
 
 ## Benchmarks
 
+> **Note — ทำไม baseline หลักคือ HistGradientBoosting (HistGB):** คือ gradient boosting
+> (ensemble ของ trees ที่สร้างทีละต้น แต่ละต้น fit ความผิดพลาดของต้นก่อน — แชมป์ของ
+> tabular data ตระกูลเดียวกับ XGBoost/LightGBM) เวอร์ชัน histogram-binned ของ sklearn
+> ที่เร็วพอจะเทียบบนข้อมูลล้านแถว — เป็น baseline ที่**แข็งที่สุดที่ scale ได้**โดยไม่ต้อง
+> ติดตั้งอะไรเพิ่ม: ชนะมันที่ไหน = ชนะของจริง ความต่างเชิงโครงสร้างกับ leadx: HistGB
+> เลือก split โดยดู y (กรอง noise เองได้ แม่นกว่าบน tabular ทั่วไป) แต่ราคาคือ เปลี่ยน y
+> = เทรนใหม่ทั้งป่า, ต้องมี labeled negatives, และ gradient ถูก majority กลืนเมื่อ
+> imbalance สุดโต่ง — สามข้อนี้คือช่องที่ leadx ชนะพอดี
+>
+> **กติกาเลือกใช้ใน 1 บรรทัด:** มี label ครบ + โจทย์เดียว + imbalance ไม่สุดโต่ง →
+> boosting; เป็น PU / rare-positive < 0.3% / หลายโจทย์บน space เดียว / ต้อง deploy
+> เป็น hash table → leadx
+
 ### Accuracy vs other algorithms (5-fold CV AUC)
 
 leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
