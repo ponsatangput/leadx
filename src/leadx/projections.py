@@ -54,8 +54,8 @@ class ProjectionBank:
     """
 
     def __init__(self, n_tables=10, n_bits=16, strategy="unsupervised",
-                 hash_mode="median", oversample=10, balance_min=0.40,
-                 redundancy_max=0.30, sample_size=100_000,
+                 hash_mode="median", cat_bit_frac="auto", oversample=10,
+                 balance_min=0.40, redundancy_max=0.30, sample_size=100_000,
                  min_seeds_per_class=50, random_state=0):
         if strategy not in ("unsupervised", "supervised"):
             raise ValueError(f"strategy ไม่รู้จัก: {strategy}")
@@ -65,6 +65,7 @@ class ProjectionBank:
         self.n_bits = n_bits
         self.strategy = strategy
         self.hash_mode = hash_mode
+        self.cat_bit_frac = cat_bit_frac
         self.oversample = oversample
         self.balance_min = balance_min
         self.redundancy_max = redundancy_max
@@ -72,10 +73,18 @@ class ProjectionBank:
         self.min_seeds_per_class = min_seeds_per_class
         self.random_state = random_state
 
-    def fit(self, Z: np.ndarray, y=None) -> "ProjectionBank":
+    def fit(self, Z: np.ndarray, y=None, cat_mask: np.ndarray | None = None) -> "ProjectionBank":
         rng = np.random.default_rng(self.random_state)
         Z = np.asarray(Z, dtype=np.float32)
         n = Z.shape[0]
+        # type-aware bits: cat_mask ระบุ output columns ที่มาจาก categorical blocks
+        # → จัดสรร bits แยกชนิด (hyperplane สำหรับ numeric, bipartition สำหรับ cat)
+        self._cat_mask = None
+        if cat_mask is not None and np.any(cat_mask) and self.cat_bit_frac != 0:
+            if self.hash_mode == "origin":
+                warnings.warn("cat_bit_frac ใช้ได้เฉพาะ hash_mode='median' — ข้าม")
+            else:
+                self._cat_mask = np.asarray(cat_mask, dtype=bool)
         if self.hash_mode == "origin":
             # Contract (origin mode): input ต้อง centered — hyperplane ผ่าน origin
             # ถ้า mean เบ้แรง เกณฑ์ balance จะคัดทิ้ง bits ที่ align กับทิศ offset
@@ -114,12 +123,45 @@ class ProjectionBank:
         self._diversity = self._compute_diversity(S[:20_000])
         return self
 
+    def _typed_candidates(self, d: int, rng) -> np.ndarray:
+        """สร้าง candidates แยกชนิด: numeric bits project เฉพาะ numeric dims,
+        cat bits เฉพาะ cat dims (บน one-hot = random bipartition ของ categories)
+        interleave สองชนิดเพื่อให้ prefix masking ของ Tuner ยังเหลือทั้งคู่
+
+        supervised: สร้าง oversample เท่า (ครึ่ง num ครึ่ง cat) ให้ IG ranking
+        เป็นผู้จัดสรรชนิดตาม signal จริง"""
+        cm = self._cat_mask
+        n_cat_dims = int(cm.sum())
+        if self.strategy_ == "supervised":
+            n_total = self.oversample * self.n_bits
+            n_cat = n_total // 2
+            is_cat = np.zeros(n_total, dtype=bool)
+            is_cat[:n_cat] = True
+            rng.shuffle(is_cat)
+        else:
+            frac = (n_cat_dims / d) if self.cat_bit_frac == "auto" else float(self.cat_bit_frac)
+            n_cat = int(round(self.n_bits * frac))
+            if 0 < frac:
+                n_cat = max(n_cat, 1)
+            if frac < 1 and n_cat_dims < d:
+                n_cat = min(n_cat, self.n_bits - 1)
+            # interleave แบบ Bresenham — cat bits กระจายทั่วทุก prefix
+            j = np.arange(self.n_bits)
+            is_cat = ((j + 1) * n_cat) // self.n_bits - (j * n_cat) // self.n_bits > 0
+        C = rng.standard_normal((d, len(is_cat)))
+        C[np.ix_(cm, np.nonzero(~is_cat)[0])] = 0.0    # numeric bits: ปิด cat dims
+        C[np.ix_(~cm, np.nonzero(is_cat)[0])] = 0.0    # cat bits: ปิด numeric dims
+        C /= np.linalg.norm(C, axis=0, keepdims=True) + 1e-12
+        return C
+
     def _fit_table_median(self, S, y_s, rng):
         """median-threshold: ทุก bit balanced 50/50 โดยโครงสร้าง — ไม่ต้องคัด balance/
         resample เลย. unsupervised = สุ่ม B ทิศ (QR); supervised = oversample แล้วจัด
         อันดับด้วย cross-fitted IG (เรียงมาก→น้อย เพื่อ prefix masking)"""
         d = S.shape[1]
-        if self.strategy_ == "supervised":
+        if self._cat_mask is not None:
+            C = self._typed_candidates(d, rng)
+        elif self.strategy_ == "supervised":
             C = self._candidates(d, rng)                     # oversample × n_bits
         else:
             Q, _ = np.linalg.qr(rng.standard_normal((d, min(d, self.n_bits))))

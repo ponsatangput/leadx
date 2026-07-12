@@ -86,3 +86,17 @@ def test_mixed_numeric_categorical():
     Z = FeatureEncoder().fit_transform(df)
     assert Z.shape == (3, 1 + 2)
     assert not np.isnan(Z).any()
+
+
+def test_cat_mask_marks_categorical_output_columns():
+    df = pl.DataFrame({
+        "x": [1.0, 2.0, None, 4.0],          # numeric + missing → 2 คอลัมน์ (value, indicator)
+        "cat": ["a", "b", "a", "c"],          # one-hot 3 คอลัมน์
+    })
+    enc = FeatureEncoder().fit(df)
+    Z = enc.transform(df)
+    assert enc.cat_mask_.shape == (Z.shape[1],)
+    np.testing.assert_array_equal(enc.cat_mask_, [False, False, True, True, True])
+    # from_dict ต้องสร้าง mask กลับมาได้
+    enc2 = FeatureEncoder.from_dict(enc.to_dict())
+    np.testing.assert_array_equal(enc2.cat_mask_, enc.cat_mask_)

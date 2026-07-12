@@ -72,7 +72,8 @@ class LeadX:
     def __init__(self, mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
                  strategy="unsupervised", weights="mean", grid=None,
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
-                 hash_mode="median", chunk_size=1_000_000, random_state=0):
+                 hash_mode="median", cat_bit_frac="auto",
+                 chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if feature_weighting not in ("none", "corr"):
@@ -90,6 +91,7 @@ class LeadX:
         self.alpha = alpha
         self.agg = agg
         self.hash_mode = hash_mode
+        self.cat_bit_frac = cat_bit_frac
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -134,22 +136,28 @@ class LeadX:
         if Z_bg is not None and self.feature_weights_ is not None:
             Z_bg = Z_bg * self.feature_weights_
         if self.tune:
-            tuner = Tuner(grid=self.grid, mode=self.mode, random_state=self.random_state)
-            best = tuner.tune(Z, y, Z_background=Z_bg)
+            tuner = Tuner(grid=self.grid, mode=self.mode,
+                          cat_bit_frac=self.cat_bit_frac, random_state=self.random_state)
+            best = tuner.tune(Z, y, Z_background=Z_bg, cat_mask=self.encoder_.cat_mask_)
             self.tuning_results_ = tuner.results_
             cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights",
                                         "score_type", "alpha", "agg")}
+            fr = best.get("cat_bit_frac", str(self.cat_bit_frac))
+            cfg["cat_bit_frac"] = "auto" if fr == "auto" else float(fr)
         else:
             self.tuning_results_ = None
             cfg = {"strategy": self.strategy, "n_bits": self.n_bits,
                    "n_tables": self.n_tables, "m": self.m, "weights": self.weights,
-                   "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg}
+                   "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg,
+                   "cat_bit_frac": self.cat_bit_frac}
         self.config_ = cfg
         bank = ProjectionBank(
             n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
-            hash_mode=self.hash_mode, random_state=self.random_state,
+            hash_mode=self.hash_mode, cat_bit_frac=cfg["cat_bit_frac"],
+            random_state=self.random_state,
         )
-        bank.fit(Z, y if self.mode == "two_class" else None)
+        bank.fit(Z, y if self.mode == "two_class" else None,
+                 cat_mask=self.encoder_.cat_mask_)
         self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         codes = self.hasher_.transform(Z)
         bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
@@ -274,6 +282,7 @@ class LeadX:
         cfg.setdefault("score_type", "prop")
         cfg.setdefault("alpha", 2.0)
         cfg.setdefault("agg", "mean")
+        cfg.setdefault("cat_bit_frac", "auto")
         clf = cls(
             mode=meta["mode"], tune=False, n_bits=cfg["n_bits"],
             n_tables=cfg["n_tables"], m=cfg["m"], strategy=cfg["strategy"],

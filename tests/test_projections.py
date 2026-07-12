@@ -100,3 +100,32 @@ def test_median_mode_supervised_ranks_by_ig():
     assert bank.strategy_ == "supervised"
     alignments = np.abs(bank.P_[0, 0, :])
     assert alignments[0] == alignments.max()  # bit แรกจับแกน signal
+
+
+def test_type_aware_bits_split_and_interleaved():
+    """cat_mask → bits แยกชนิด: cat bits project เฉพาะ cat dims (และกลับกัน)
+    และสองชนิดถูก interleave เพื่อให้ prefix masking ยังมีทั้งคู่"""
+    rng = np.random.default_rng(0)
+    Z = rng.standard_normal((3000, 30)).astype(np.float32)
+    cat_mask = np.zeros(30, bool); cat_mask[20:] = True  # 10 มิติท้ายเป็น cat
+    bank = ProjectionBank(n_tables=2, n_bits=8, random_state=0).fit(Z, cat_mask=cat_mask)
+    P = bank.P_
+    is_cat_bit = []
+    for j in range(8):
+        col = P[0, :, j]
+        num_active = np.abs(col[~cat_mask]).sum() > 0
+        cat_active = np.abs(col[cat_mask]).sum() > 0
+        assert num_active != cat_active  # bit ต้องเป็นชนิดเดียว ไม่ผสม
+        is_cat_bit.append(bool(cat_active))
+    # auto frac = 10/30 → ~3 cat bits จาก 8 และต้องกระจาย (ไม่กองท้าย)
+    assert 2 <= sum(is_cat_bit) <= 4
+    assert any(is_cat_bit[:4]) and any(not b for b in is_cat_bit[:4])
+
+
+def test_no_cat_mask_unchanged_behavior():
+    rng = np.random.default_rng(1)
+    Z = rng.standard_normal((2000, 15)).astype(np.float32)
+    b1 = ProjectionBank(n_tables=2, n_bits=6, random_state=5).fit(Z)
+    b2 = ProjectionBank(n_tables=2, n_bits=6, random_state=5).fit(
+        Z, cat_mask=np.zeros(15, bool))
+    np.testing.assert_array_equal(b1.P_, b2.P_)

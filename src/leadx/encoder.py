@@ -64,7 +64,22 @@ class FeatureEncoder:
                 self.cat_maps_[c] = sorted(s.unique().to_list())
             else:
                 self.cat_maps_[c] = None  # feature hashing — stateless
+        self._build_cat_mask()
         return self
+
+    def _build_cat_mask(self) -> None:
+        """boolean mask ต่อ output column: True = มาจาก categorical block
+        (ใช้โดย ProjectionBank จัดสรร bits แยกชนิด — hyperplane bits ปกติแทบมองไม่เห็น
+        one-hot เพราะ contribution เล็กเทียบมิติ numeric รวมกัน)"""
+        dims: list[bool] = []
+        for c in self.numeric_cols_:
+            dims.append(False)
+            if self.stats_[c]["has_missing"]:
+                dims.append(False)
+        for c in self.cat_cols_:
+            k = len(self.cat_maps_[c]) if self.cat_maps_[c] is not None else self.hash_dims
+            dims.extend([True] * k)
+        self.cat_mask_ = np.array(dims, dtype=bool)
 
     def transform(self, df: pl.DataFrame) -> np.ndarray:
         missing = set(self.columns_) - set(df.columns)
@@ -129,6 +144,7 @@ class FeatureEncoder:
         enc.cat_cols_ = d["cat_cols"]
         enc.stats_ = d["stats"]
         enc.cat_maps_ = d["cat_maps"]
+        enc._build_cat_mask()
         return enc
 
     def _hashed(self, s: pl.Series, col: str) -> np.ndarray:

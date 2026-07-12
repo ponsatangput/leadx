@@ -153,3 +153,21 @@ def test_lift_pu_facade_keeps_lift_scale(tmp_path):
     clf.save(tmp_path / "m")
     loaded = LeadX.load(tmp_path / "m")
     np.testing.assert_allclose(loaded.score_samples(df_all), s, rtol=1e-6)
+
+
+def test_categorical_signal_end_to_end():
+    # signal อยู่ใน categorical ล้วน — เดิมพังแทบสุ่ม (0.53) type-aware bits ต้องกู้ได้
+    rng = np.random.default_rng(0)
+    n = 12000
+    num = rng.standard_normal((n, 20))  # noise ล้วน
+    ids = [rng.integers(0, 8, n) for _ in range(3)]
+    effects = [rng.standard_normal(8) for _ in range(3)]
+    logit = sum(e[i] for e, i in zip(effects, ids))
+    y = (logit + rng.standard_normal(n) * 0.7 > np.median(logit)).astype(float)
+    df = pl.DataFrame({**{f"n{i}": num[:, i] for i in range(20)},
+                       **{f"c{j}": [f"v{v}" for v in ids[j]] for j in range(3)}})
+    tr, te = slice(0, 8000), slice(8000, n)
+    clf = LeadX(mode="two_class", tune=False, n_bits=12, n_tables=15,
+                score_type="lift", agg="log", random_state=0).fit(df[tr], y[tr])
+    auc = roc_auc_score(y[te], clf.score_samples(df[te]))
+    assert auc > 0.80  # เดิม ~0.53

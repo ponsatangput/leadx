@@ -163,6 +163,28 @@ lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = 
 **เงื่อนไขการใช้:** y_ref ต้อง represent กลุ่มโจทย์ที่จะ reuse จริง — ถ้าโจทย์ในอนาคต
 signal อยู่คนละ features weights จะกดมันทิ้ง (semi-task-agnostic ไม่ใช่ fully)
 
+### Type-aware bits — แก้ categorical blindness (`cat_bit_frac`)
+
+ข้อสังเกตจากผู้ใช้ที่วัดแล้วจริงและรุนแรง: hyperplane bit ที่คลุมทุกมิติแทบมองไม่เห็น
+categorical — contribution ของ one-hot (`w_j/√k`) จิ๋วเทียบความแกว่งของมิติ numeric รวม
+→ วัดได้ `P(bit เปลี่ยน | เปลี่ยน category) = 3.6%` (ควร ~50%) → ถ้า signal อยู่ใน
+categorical วิธีเดิมพังเกือบสุ่ม
+
+**ทางแก้:** จัดสรร bits แยกชนิด — cat bits project เฉพาะ categorical blocks (+median
+threshold = random bipartition ของ categories ที่ balanced ตามมวล) interleave กับ
+numeric bits เพื่อให้ prefix masking เหลือทั้งคู่. ผลวัดผ่าน facade (3 seeds):
+
+| signal | frac=0 (เดิม) | type-aware (auto) | tuner เลือก |
+|---|---|---|---|
+| categorical ล้วน | 0.526 | **0.929** | auto |
+| ผสม num+cat | 0.773 | **0.888** | auto |
+| numeric ล้วน | **0.896** | 0.811 | **0.0** ← เลี่ยง regression |
+
+`cat_bit_frac` อยู่ใน tuner grid (ต้อง re-hash ต่อ frac — จ่ายได้เพราะ median-mode fit
+เร็ว) supervised strategy จัดสรรชนิด bits เองผ่าน IG ranking (candidate pool ผสมสองชนิด)
+เชิงทฤษฎี: การยอมรับว่า hyperplane เป็น hash family ของ continuous space — categorical
+ต้องใช้ family ของมันเอง (bipartition) แล้วต่อรหัสเข้า bucket เดียวกัน
+
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
 **Feature bootstrap / random subspace ต่อ table** (สุ่ม subset ของ features ให้แต่ละ

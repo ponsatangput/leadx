@@ -43,10 +43,11 @@ class LeadXBackbone:
     """
 
     def __init__(self, n_bits=16, n_tables=15, hash_mode="median",
-                 random_state=0, chunk_size=1_000_000):
+                 cat_bit_frac="auto", random_state=0, chunk_size=1_000_000):
         self.n_bits = n_bits
         self.n_tables = n_tables
         self.hash_mode = hash_mode
+        self.cat_bit_frac = cat_bit_frac
         self.random_state = random_state
         self.chunk_size = chunk_size
 
@@ -75,8 +76,9 @@ class LeadXBackbone:
             self.feature_weights_ = None
         bank = ProjectionBank(
             n_tables=self.n_tables, n_bits=self.n_bits, strategy="unsupervised",
-            hash_mode=self.hash_mode, random_state=self.random_state,
-        ).fit(Z)
+            hash_mode=self.hash_mode, cat_bit_frac=self.cat_bit_frac,
+            random_state=self.random_state,
+        ).fit(Z, cat_mask=self.encoder_.cat_mask_)
         self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         self.diagnostics_ = bank.diagnostics()
         self._seed_codes = self.hasher_.transform(Z, chunk_size=self.chunk_size)
