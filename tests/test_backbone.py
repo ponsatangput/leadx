@@ -110,3 +110,49 @@ def test_fit_task_lift():
     s = task.score_samples(df)
     assert roc_auc_score(y, s) > 0.75
     assert s.max() > 1.0  # lift scale
+
+
+def _multitask_noisy(n=12000, d=100, n_sig=8, seed=0):
+    """หลายโจทย์แชร์ signal features ชุดเดียว (คนละ combination) + noise หนัก"""
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal((n, d))
+    df = pl.DataFrame({f"f{i}": X[:, i] for i in range(d)})
+    ys = []
+    for _ in range(3):
+        w = np.zeros(d)
+        w[:n_sig] = rng.standard_normal(n_sig)
+        ys.append((X @ w + rng.standard_normal(n) * 0.5 > 0).astype(float))
+    # โจทย์ disjoint: signal อยู่ features คนละชุด
+    w2 = np.zeros(d)
+    w2[n_sig:2 * n_sig] = rng.standard_normal(n_sig)
+    y_disjoint = (X @ w2 + rng.standard_normal(n) * 0.5 > 0).astype(float)
+    return df, ys, y_disjoint
+
+
+def test_shared_weights_lift_related_tasks_and_hurt_disjoint():
+    # เรียน weights จากโจทย์อ้างอิง → โจทย์ที่แชร์ signal features ได้ประโยชน์มาก (OOS)
+    # แต่โจทย์ที่ signal คนละชุดเสียหาย — trade-off ที่ต้องเข้าใจก่อนใช้
+    df, ys, y_dis = _multitask_noisy()
+    tr, te = slice(0, 8000), slice(8000, 12000)
+    plain = LeadXBackbone(n_bits=10, n_tables=10, random_state=0).fit(df[tr])
+    weighted = LeadXBackbone(n_bits=10, n_tables=10, random_state=0).fit(
+        df[tr], y_ref=ys[0][tr])
+    w = weighted.feature_weights_
+    assert w[:8].mean() > 3 * w[8:].mean()  # จับ signal features ถูกชุด
+    for y in ys[1:]:  # โจทย์ related (ไม่ใช่ ref เอง)
+        auc_p = roc_auc_score(y[te], plain.fit_task(y[tr]).predict_proba(df[te])[:, 1])
+        auc_w = roc_auc_score(y[te], weighted.fit_task(y[tr]).predict_proba(df[te])[:, 1])
+        assert auc_w > auc_p + 0.10  # กำไรชัดเจน (วัดจริง ~+0.25)
+    # downside: โจทย์ disjoint แย่ลง — ต้องเลือก y_ref ที่ represent กลุ่มโจทย์จริง
+    auc_p = roc_auc_score(y_dis[te], plain.fit_task(y_dis[tr]).predict_proba(df[te])[:, 1])
+    auc_w = roc_auc_score(y_dis[te], weighted.fit_task(y_dis[tr]).predict_proba(df[te])[:, 1])
+    assert auc_w < auc_p
+
+
+def test_shared_weights_persist_save_load(tmp_path):
+    df, ys, _ = _multitask_noisy(n=1000)
+    bb = LeadXBackbone(n_bits=8, n_tables=4, random_state=0).fit(df, y_ref=ys[0])
+    expected = bb.fit_task(ys[1]).predict_proba(df)
+    bb.save(tmp_path / "bb")
+    loaded = LeadXBackbone.load(tmp_path / "bb")
+    np.testing.assert_allclose(loaded.fit_task(ys[1]).predict_proba(df), expected, rtol=1e-6)

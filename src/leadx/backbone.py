@@ -21,6 +21,14 @@ from .projections import ProjectionBank
 from .scoring import SeedScorer, normalize_pu, pu_score_range
 
 
+def _corr_weights(Z: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """|point-biserial corr| ต่อ feature (Z standardize แล้ว) — สูตรเดียวกับ
+    LeadX.feature_weighting="corr" """
+    yc = np.asarray(y, dtype=np.float64) - np.mean(y)
+    denom = np.sqrt((Z ** 2).sum(axis=0)) * np.sqrt((yc ** 2).sum()) + 1e-12
+    return np.abs((Z * yc[:, None]).sum(axis=0) / denom).astype(np.float32)
+
+
 class LeadXBackbone:
     """Reusable hashing backbone — projections + cached seed codes (unsupervised)
 
@@ -29,6 +37,8 @@ class LeadXBackbone:
     n_bits, n_tables : int
         ขนาด hash สูงสุดของ backbone; แต่ละ task ใช้ b<=n_bits (prefix mask) และ
         k<=n_tables (subset) ได้โดยไม่ต้อง re-hash
+    hash_mode : {"median", "origin"}
+        ดู ProjectionBank
     random_state : int
     """
 
@@ -40,10 +50,29 @@ class LeadXBackbone:
         self.random_state = random_state
         self.chunk_size = chunk_size
 
-    def fit(self, df: pl.DataFrame) -> "LeadXBackbone":
-        """เข้ารหัส + สุ่ม/คัด projections (unsupervised) + cache seed codes"""
+    def fit(self, df: pl.DataFrame, y_ref=None) -> "LeadXBackbone":
+        """เข้ารหัส + สุ่ม/คัด projections (unsupervised) + cache seed codes
+
+        Parameters
+        ----------
+        df : polars.DataFrame
+        y_ref : array-like of {0,1} | None
+            "shared feature weights": ถ้าให้ label ของโจทย์อ้างอิงมา จะถ่วง features
+            ตาม |corr กับ y_ref| แล้วแชร์ weights นี้กับ **ทุกโจทย์** บน backbone —
+            ลด noise dilution โดยจ่าย task-agnosticism บางส่วน (โจทย์ที่ signal
+            อยู่คนละ features กับโจทย์อ้างอิงอาจเสียประโยชน์ — ดู DESIGN_NOTES)
+        """
         self.encoder_ = FeatureEncoder().fit(df)
         Z = self.encoder_.transform(df)
+        if y_ref is not None:
+            if len(np.asarray(y_ref)) != df.height:
+                raise ValueError(
+                    f"ความยาว y_ref ({len(np.asarray(y_ref))}) ไม่ตรงกับ df ({df.height})"
+                )
+            self.feature_weights_ = _corr_weights(Z, y_ref)
+            Z = Z * self.feature_weights_
+        else:
+            self.feature_weights_ = None
         bank = ProjectionBank(
             n_tables=self.n_tables, n_bits=self.n_bits, strategy="unsupervised",
             hash_mode=self.hash_mode, random_state=self.random_state,
@@ -55,7 +84,10 @@ class LeadXBackbone:
 
     def transform(self, df: pl.DataFrame) -> np.ndarray:
         """hash rows ใหม่ผ่าน projections เดิม → codes (n × n_tables) uint64"""
-        return self.hasher_.transform(self.encoder_.transform(df), chunk_size=self.chunk_size)
+        Z = self.encoder_.transform(df)
+        if self.feature_weights_ is not None:
+            Z = Z * self.feature_weights_
+        return self.hasher_.transform(Z, chunk_size=self.chunk_size)
 
     def _resolve(self, n_bits, n_tables):
         b = self.n_bits if n_bits is None else n_bits
@@ -126,6 +158,8 @@ class LeadXBackbone:
         np.save(path / "projections.npy", self.hasher_.P)
         np.save(path / "thresholds.npy", self.hasher_.thresholds)
         np.save(path / "seed_codes.npy", self._seed_codes)
+        if self.feature_weights_ is not None:
+            np.save(path / "feature_weights.npy", self.feature_weights_)
         meta = {
             "n_bits": self.n_bits, "n_tables": self.n_tables,
             "random_state": self.random_state, "chunk_size": self.chunk_size,
@@ -144,6 +178,8 @@ class LeadXBackbone:
         thresholds = np.load(thr_file) if thr_file.exists() else None  # backbone เก่า → 0
         bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         bb._seed_codes = np.load(path / "seed_codes.npy")
+        fw_file = path / "feature_weights.npy"
+        bb.feature_weights_ = np.load(fw_file) if fw_file.exists() else None
         bb.diagnostics_ = {"note": "loaded — projection diagnostics ไม่ถูกบันทึก"}
         return bb
 

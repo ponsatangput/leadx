@@ -149,6 +149,7 @@ score(bucket) = (n_pos + m·π) / (n_total + m)
 | `alpha` | float (default 2) | shrink-toward-1 strength ของ lift — กล่องหลักฐานน้อยถูกดึงเข้า 1 (กัน outlier กล่องจิ๋ว) |
 | `agg` | `"mean"` (default) / `"log"` | รวม lift ข้าม tables แบบ arithmetic / geometric (NB-style) |
 | `m` | float (default 10) | smoothing strength (สำหรับ `"prop"`) |
+| `hash_mode` | `"median"` (default) / `"origin"` | จุดตัดของ hyperplane: median ของ `w·x` (balanced โดยโครงสร้าง, robust, เร็ว) / ตัดที่ 0 (แบบดั้งเดิม + balance-select machinery) |
 | `chunk_size` | int (default 1M) | ขนาด chunk ตอน predict — คุม peak memory |
 
 ---
@@ -183,6 +184,9 @@ clf = LeadX(tune=False, n_bits=14, n_tables=10, m=10.0)
 from leadx import LeadXBackbone
 
 bb = LeadXBackbone(n_bits=16, n_tables=15, random_state=0).fit(X)   # แพงครั้งเดียว
+# หรือ: .fit(X, y_ref=y_first_task) — shared feature weights: เรียน relevance จาก
+# โจทย์อ้างอิง แชร์กับทุกโจทย์ (โจทย์ที่แชร์ signal features ได้ +0.25 AUC บนข้อมูล noisy;
+# โจทย์ที่ signal คนละชุดจะแย่ลง — y_ref ต้อง represent กลุ่มโจทย์จริง)
 churn = bb.fit_task(y_churn)                    # ~30ms — คืน TaskModel
 fraud = bb.fit_task(y_fraud)
 leads = bb.fit_task(mode="pu", seeds=X_pos, background=X)

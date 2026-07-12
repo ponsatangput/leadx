@@ -134,7 +134,32 @@ lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = 
 - **predict_proba ภายใต้ lift**: P(y=1|x) ≈ π·lift (SCAR) clip [0,1] — probability
   หยาบ ranking คงเดิม
 
-## 5.3 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
+## 5.3 v2 — implemented
+
+### Median-threshold hashing (default ใหม่: `hash_mode="median"`)
+
+`bit = (w·x > median(w·x))` แทนตัดที่ origin — ทุก bit balanced 50/50 โดยโครงสร้าง:
+- **ตัด machinery ทั้งชุด** (balance test, resampling, redundancy greedy) ใน unsupervised
+  path → fit เร็วขึ้น ~15x และไม่มีสมมุติฐานให้ผิดอีก
+- **ฆ่า failure mode "input ไม่ centered"** — threshold เลื่อนตามข้อมูลเอง (aniso+offset:
+  0.818 → 0.875); origin mode ยังอยู่เพื่อ backward compat
+- accuracy ผ่าน facade: median ≥ origin ใน 5/6 dataset-seeds (mean 0.889 vs 0.884)
+- supervised ยังใช้ oversample + cross-fitted IG ranking บน median bits
+
+### Shared feature weights (`backbone.fit(df, y_ref=...)`)
+
+ลด tension accuracy↔reuse แบบจ่ายบางส่วน: เรียน |corr| weights จาก**โจทย์อ้างอิงเดียว**
+แล้วแชร์กับทุกโจทย์บน backbone (วัด OOS, d=100, 8 signal features ร่วม):
+
+| | plain backbone | + shared weights |
+|---|---|---|
+| โจทย์ที่แชร์ signal features (3 โจทย์) | 0.66–0.69 | **0.92–0.96** |
+| โจทย์ signal คนละชุด (disjoint) | 0.646 | **0.540** ← แย่ลง |
+
+**เงื่อนไขการใช้:** y_ref ต้อง represent กลุ่มโจทย์ที่จะ reuse จริง — ถ้าโจทย์ในอนาคต
+signal อยู่คนละ features weights จะกดมันทิ้ง (semi-task-agnostic ไม่ใช่ fully)
+
+## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
 **Feature bootstrap / random subspace ต่อ table** (สุ่ม subset ของ features ให้แต่ละ
 hash table) — หวังแก้ noise dilution แบบ unsupervised (รักษา backbone reuse):
@@ -149,10 +174,9 @@ hash table) — หวังแก้ noise dilution แบบ unsupervised (ร
 dilution ต้องมี "ความรู้เรื่อง relevance" (feature_weighting ใช้ y) ไม่ใช่แค่ "ความหลากหลาย"
 — ไม่มีทางลัด unsupervised ง่ายๆ, tension accuracy↔reuse ยังอยู่ครบ
 
-## 6. ทิศทางที่พักไว้ (พิจารณา v2)
+## 6. ทิศทางที่พักไว้ (พิจารณา v3)
 
-- **median-threshold hashing** — offset hashing (threshold = median ของ `w·x` แทนตัดที่ 0) → balanced bit โดยอัตโนมัติ, ลบ bit-test machinery, ไม่บิดข้อมูล (LSH ไม่จำเป็นต้องผ่าน origin)
 - **PCA/ZCA whiten / ITQ** — แก้ anisotropy ให้เส้นสุ่มตัดตรงที่ข้อมูลอยู่จริง (พักเพราะเปลี่ยน data distribution)
 - **recursive refinement** ของ dense bucket — แก้ coverage imbalance (รอข้อมูลจริงก่อน)
-- **cross-fitted / shared feature weights** — ลด accuracy↔reuse tension
+- **cross-fitted weights ใน Tuner** — ปิด leakage ของ feature_weighting เข้า OOF (§5.1)
 - **multi-class**, **isotonic calibration**, **GPU/out-of-core**
