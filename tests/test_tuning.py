@@ -94,3 +94,35 @@ def test_tuner_evaluates_lift_and_prop():
     n_prop = tuner.results_.filter(pl.col("score_type") == "prop").height
     n_lift = tuner.results_.filter(pl.col("score_type") == "lift").height
     assert n_lift == n_prop * 2 * 2 / 2  # lift: ×alpha×agg แต่ไม่คูณ m (2 ค่าใน grid)
+
+
+def test_tuner_respects_hash_mode(monkeypatch):
+    # #2: LeadX(hash_mode="origin", tune=True) ต้องจูนด้วย origin banks ไม่ใช่ median
+    from leadx.projections import ProjectionBank
+    seen = []
+    orig_init = ProjectionBank.__init__
+
+    def spy(self, *a, **kw):
+        seen.append(kw.get("hash_mode", "median"))
+        orig_init(self, *a, **kw)
+
+    monkeypatch.setattr(ProjectionBank, "__init__", spy)
+    X, y = _blobs(n_per=150)
+    grid = {**SMALL_GRID, "strategy": ["unsupervised"], "score_type": ["prop"],
+            "alpha": [2.0], "agg": ["mean"], "cat_bit_frac": [0.0]}
+    Tuner(grid=grid, n_folds=3, mode="two_class", hash_mode="origin",
+          random_state=0).tune(X, y)
+    assert seen and set(seen) == {"origin"}
+
+
+def test_tuner_exposes_winning_bank_prefix():
+    # #1: bank ที่ชนะถูกเก็บไว้ให้ facade ใช้ (ไม่ refit ใหม่)
+    X, y = _blobs(n_per=200)
+    grid = {**SMALL_GRID, "strategy": ["unsupervised"], "score_type": ["lift"],
+            "alpha": [2.0], "agg": ["log"], "cat_bit_frac": [0.0]}
+    tuner = Tuner(grid=grid, n_folds=3, mode="two_class", random_state=0)
+    best = tuner.tune(X, y)
+    bank = tuner.best_bank_
+    assert bank.P_.shape[0] == max(grid["n_tables"])
+    assert bank.P_.shape[2] == max(grid["n_bits"])
+    assert bank.strategy_ == best["strategy"]

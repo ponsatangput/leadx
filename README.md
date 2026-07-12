@@ -149,7 +149,8 @@ lift = 3 อ่านว่า "bucket นี้ positive เข้มข้น�
 
 hyperplane bit ปกติแทบมองไม่เห็น one-hot (contribution `w_j/√k` จิ๋วเทียบมิติ numeric รวมกัน —
 วัดจริง: P(bit เปลี่ยน|เปลี่ยน category) = 3.6%) — `cat_bit_frac` จึงจัดสรร bits ส่วนหนึ่ง
-project เฉพาะ categorical blocks (+median threshold = balanced bipartition ของ categories)
+project เฉพาะ categorical blocks (+tie-aware threshold = bipartition ของ categories
+ที่ balance ดีสุดเท่าที่ความถี่ categories อนุญาต — median ดิบบน atoms เบ้ให้ bit ตายได้)
 ผลบนข้อมูล cat-signal: 0.53 → 0.93; tuner เลือกสัดส่วนให้อัตโนมัติ (0 เมื่อ cat เป็น noise)
 
 ---
@@ -167,7 +168,7 @@ project เฉพาะ categorical blocks (+median threshold = balanced biparti
 | `agg` | `"mean"` (default) / `"log"` | รวม lift ข้าม tables แบบ arithmetic / geometric (NB-style) |
 | `m` | float (default 10) | smoothing strength (สำหรับ `"prop"`) |
 | `cat_bit_frac` | `"auto"` / float 0–1 | สัดส่วน bits ที่ project เฉพาะ categorical blocks — แก้ปัญหา hyperplane bits มองไม่เห็น one-hot (cat-signal: 0.53→0.93); tuner เลือก 0.0 อัตโนมัติเมื่อ cat เป็น noise |
-| `hash_mode` | `"median"` (default) / `"origin"` | จุดตัดของ hyperplane: median ของ `w·x` (balanced โดยโครงสร้าง, fit เร็วกว่า ~15x, robust ต่อ input ไม่ centered; **AUC เสมอ origin** — paired 25 คู่ diff +0.001±0.015) / ตัดที่ 0 (ดั้งเดิม + balance-select) |
+| `hash_mode` | `"median"` (default) / `"origin"` | จุดตัดของ hyperplane: tie-aware threshold ~median ของ `w·x` (split ใกล้ 50/50 สุดเท่าที่ค่าอนุญาต, fit เร็วกว่า ~15x, robust ต่อ input ไม่ centered; **AUC เสมอ origin** — paired 25 คู่ diff +0.001±0.015) / ตัดที่ 0 (ดั้งเดิม + balance-select) |
 | `chunk_size` | int (default 1M) | ขนาด chunk ตอน predict — คุม peak memory |
 
 ---
@@ -186,7 +187,8 @@ clf.tuning_results_    # Polars DataFrame — ทุก config เรียง�
 - **n_bits น้อยลง** = mask เอา prefix bits (`code >> shift`) — bits เรียงจากคุณภาพสูงสุดไว้แล้ว
 - **n_tables น้อยลง** = ใช้ subset แรก
 
-การลอง 100 configs จึงมีต้นทุนแทบเท่าลอง 1 config ปิด auto-tune แล้วกำหนดเองได้:
+การลอง 100 configs จึงมีต้นทุนแทบเท่าลอง 1 config — และ**โมเดลสุดท้ายคือ prefix ของ
+bank ที่ถูกประเมินจริง** (ไม่ refit ใหม่: สิ่งที่ deploy = สิ่งที่วัด) ปิด auto-tune แล้วกำหนดเองได้:
 
 ```python
 clf = LeadX(tune=False, n_bits=14, n_tables=10, m=10.0)

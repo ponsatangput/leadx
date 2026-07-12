@@ -144,7 +144,10 @@ lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = 
 
 ### Median-threshold hashing (default ใหม่: `hash_mode="median"`)
 
-`bit = (w·x > median(w·x))` แทนตัดที่ origin — ทุก bit balanced 50/50 โดยโครงสร้าง:
+`bit = (w·x > t)` โดย t = **tie-aware threshold** (~median สำหรับ continuous; สำหรับ
+discrete atoms เลือกจุดตัดระหว่าง unique values ที่ mass split ใกล้ 50/50 สุด — median
+ดิบตกบน atom ของ majority แล้วให้ bit ตายได้ เช่น one-hot 90/10 → 21/80 bits ตาย
+ก่อน fix, 0/80 หลัง fix):
 - **ตัด machinery ทั้งชุด** (balance test, resampling, redundancy greedy) ใน unsupervised
   path → fit เร็วขึ้น ~15x และไม่มีสมมุติฐานให้ผิดอีก
 - **ฆ่า failure mode "input ไม่ centered"** — threshold เลื่อนตามข้อมูลเอง (aniso+offset:
@@ -168,6 +171,16 @@ lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = 
 
 **เงื่อนไขการใช้:** y_ref ต้อง represent กลุ่มโจทย์ที่จะ reuse จริง — ถ้าโจทย์ในอนาคต
 signal อยู่คนละ features weights จะกดมันทิ้ง (semi-task-agnostic ไม่ใช่ fully)
+
+### Tuner ↔ final model consistency (code review)
+
+- `hash_mode` ถูกส่งเข้า Tuner แล้ว (เดิม tune ด้วย median เสมอแม้ผู้ใช้ขอ origin)
+- โมเดลสุดท้ายหลัง tune = **prefix slice ของ winning bank** ที่ถูกประเมินจริง
+  (เดิม refit bank ใหม่ — GridSearchCV-style ไม่ผิดแต่มี variance ระหว่าง
+  evaluated↔deployed; ตอนนี้เป็นศูนย์ + ประหยัด refit)
+- serialization เก็บ `hash_mode`/`cat_bit_frac` ครบทั้ง LeadX/backbone
+  (artifact เก่า fallback median/auto — predictions ไม่เปลี่ยนเพราะ P/thresholds
+  ถูก persist ตรงๆ อยู่แล้ว)
 
 ### Type-aware bits — แก้ categorical blindness (`cat_bit_frac`)
 

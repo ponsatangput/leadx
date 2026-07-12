@@ -129,3 +129,34 @@ def test_no_cat_mask_unchanged_behavior():
     b2 = ProjectionBank(n_tables=2, n_bits=6, random_state=5).fit(
         Z, cat_mask=np.zeros(15, bool))
     np.testing.assert_array_equal(b1.P_, b2.P_)
+
+
+def test_skewed_categorical_no_dead_bits():
+    # #3: 90/10 binary category — median เดิมตกบน atom ของ majority → bit ตาย (minority=0)
+    # tie-aware threshold ต้องให้ split ดีสุดเท่าที่ atoms อนุญาต (10/90) ไม่ใช่ 0/100
+    import polars as pl
+    from leadx.encoder import FeatureEncoder
+    rng = np.random.default_rng(0)
+    n = 10000
+    df = pl.DataFrame({
+        "x": rng.standard_normal(n),
+        "cat": np.where(rng.random(n) < 0.9, "A", "B"),
+    })
+    enc = FeatureEncoder().fit(df)
+    Z = enc.transform(df)
+    bank = ProjectionBank(n_tables=10, n_bits=8, random_state=0).fit(
+        Z, cat_mask=enc.cat_mask_)
+    balances = np.array([t["balance"] for t in bank.diagnostics()["tables"]]).ravel()
+    assert balances.min() > 0.05  # best achievable ของ 90/10 คือ 0.10 — ห้ามมี dead bit
+
+
+def test_balanced_threshold_matches_median_on_continuous():
+    # continuous (ไม่มี ties): tie-aware threshold ต้อง ~ median เดิม → numeric ไม่เปลี่ยน
+    from leadx.projections import _balanced_thresholds
+    rng = np.random.default_rng(1)
+    proj = rng.standard_normal((5001, 6))
+    t = _balanced_thresholds(proj)
+    med = np.median(proj, axis=0)
+    np.testing.assert_allclose(t, med, atol=2e-3)
+    frac = (proj > t).mean(axis=0)
+    assert np.abs(frac - 0.5).max() < 0.01

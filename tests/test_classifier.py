@@ -171,3 +171,51 @@ def test_categorical_signal_end_to_end():
                 score_type="lift", agg="log", random_state=0).fit(df[tr], y[tr])
     auc = roc_auc_score(y[te], clf.score_samples(df[te]))
     assert auc > 0.80  # เดิม ~0.53
+
+
+def test_final_bank_is_winning_tuned_prefix():
+    # #1: โมเดลสุดท้ายต้องใช้ prefix ของ bank ที่ Tuner ประเมินจริง (ไม่ refit ใหม่)
+    from leadx.encoder import FeatureEncoder
+    from leadx.tuning import Tuner
+    df, y = _blobs_df(n_per=200)
+    grid = {"n_bits": [4, 8], "n_tables": [2, 4], "m": [10.0], "weights": ["mean"],
+            "strategy": ["unsupervised"], "score_type": ["prop"], "alpha": [2.0],
+            "agg": ["mean"], "cat_bit_frac": [0.0]}
+    clf = LeadX(mode="two_class", tune=True, grid=grid, random_state=0).fit(df, y)
+    b, k = clf.config_["n_bits"], clf.config_["n_tables"]
+    # จำลอง tuner run เดียวกัน (encoder + seed เดียวกัน) แล้วเทียบ prefix
+    Z = FeatureEncoder().fit(df).transform(df)
+    tuner = Tuner(grid=grid, n_folds=5, mode="two_class", random_state=0)
+    tuner.tune(Z, y)
+    np.testing.assert_array_equal(clf.hasher_.P, tuner.best_bank_.P_[:k, :, :b])
+    np.testing.assert_array_equal(clf.hasher_.thresholds,
+                                  tuner.best_bank_.thresholds_[:k, :b])
+
+
+def test_save_load_preserves_hash_mode_and_cat_bit_frac(tmp_path):
+    # #4: config identity หลัง load
+    df, y = _blobs_df(n_per=60)
+    clf = LeadX(mode="two_class", tune=False, n_bits=6, n_tables=3,
+                hash_mode="origin", cat_bit_frac=0.0, random_state=0).fit(df, y)
+    clf.save(tmp_path / "m")
+    loaded = LeadX.load(tmp_path / "m")
+    assert loaded.hash_mode == "origin"
+    assert loaded.cat_bit_frac == 0.0
+    np.testing.assert_allclose(loaded.predict_proba(df), clf.predict_proba(df), rtol=1e-6)
+
+
+def test_load_old_artifact_without_new_meta(tmp_path):
+    # #4: artifact เก่าไม่มี hash_mode/cat_bit_frac ใน meta → fallback + predictions เดิม
+    import json
+    df, y = _blobs_df(n_per=60)
+    clf = LeadX(mode="two_class", tune=False, n_bits=6, n_tables=3, random_state=0).fit(df, y)
+    expected = clf.predict_proba(df)
+    clf.save(tmp_path / "m")
+    meta = json.loads((tmp_path / "m" / "meta.json").read_text())
+    meta.pop("hash_mode", None)
+    meta["config"].pop("cat_bit_frac", None)
+    (tmp_path / "m" / "meta.json").write_text(json.dumps(meta))
+    loaded = LeadX.load(tmp_path / "m")
+    assert loaded.hash_mode == "median"       # fallback
+    assert loaded.cat_bit_frac == "auto"      # fallback
+    np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)

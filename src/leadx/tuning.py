@@ -57,11 +57,12 @@ class Tuner:
     """
 
     def __init__(self, grid=None, n_folds=5, mode="two_class",
-                 cat_bit_frac="auto", random_state=0):
+                 cat_bit_frac="auto", hash_mode="median", random_state=0):
         self.grid = {**DEFAULT_GRID, **(grid or {})}
         self.n_folds = n_folds
         self.mode = mode
         self.cat_bit_frac = cat_bit_frac
+        self.hash_mode = hash_mode
         self.random_state = random_state
 
     def tune(self, Z: np.ndarray, y: np.ndarray, Z_background=None,
@@ -88,7 +89,7 @@ class Tuner:
         folds = stratified_folds(y, n_folds, rng)
         has_cat = cat_mask is not None and bool(np.any(cat_mask))
         fracs = self.grid["cat_bit_frac"]
-        rows = []
+        rows, banks = [], {}
         for strategy in self.grid["strategy"]:
             for frac in fracs:
                 # dedupe frac: ไม่มี cat columns → frac ไม่มีผล ประเมินค่าแรกค่าเดียว;
@@ -103,13 +104,15 @@ class Tuner:
                 # (median mode fit เร็วพอที่จะจ่ายได้; ต่างจาก bits/tables ที่ mask ได้)
                 bank = ProjectionBank(
                     n_tables=k_max, n_bits=b_max, strategy=strategy,
-                    cat_bit_frac=frac_val, random_state=self.random_state,
+                    hash_mode=self.hash_mode, cat_bit_frac=frac_val,
+                    random_state=self.random_state,
                 )
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     bank.fit(Z, y if self.mode == "two_class" else None, cat_mask=cat_mask)
                 if strategy == "supervised" and bank.strategy_ == "unsupervised":
                     continue  # guard fallback แล้ว — ประเมินซ้ำกับ unsupervised ไม่มีประโยชน์
+                banks[(strategy, str(frac))] = bank
                 hasher = HashEnsemble(bank.P_, bank.thresholds_)
                 codes = hasher.transform(Z)
                 codes_bg = hasher.transform(Z_background) if Z_background is not None else None
@@ -146,4 +149,7 @@ class Tuner:
                     })
         self.results_ = pl.DataFrame(rows).sort("score", descending=True)
         self.best_ = self.results_.row(0, named=True)
+        # เก็บ bank ที่ชนะ — facade ใช้ prefix ของมันเป็นโมเดลสุดท้ายตรงๆ
+        # (สิ่งที่ deploy = สิ่งที่ถูกประเมิน ไม่ใช่ refit ใหม่)
+        self.best_bank_ = banks[(self.best_["strategy"], self.best_["cat_bit_frac"])]
         return self.best_

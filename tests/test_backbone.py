@@ -156,3 +156,16 @@ def test_shared_weights_persist_save_load(tmp_path):
     bb.save(tmp_path / "bb")
     loaded = LeadXBackbone.load(tmp_path / "bb")
     np.testing.assert_allclose(loaded.fit_task(ys[1]).predict_proba(df), expected, rtol=1e-6)
+
+
+def test_backbone_save_load_preserves_config(tmp_path):
+    # #4: backbone ต้องรักษา hash_mode + cat_bit_frac ข้าม save/load
+    df, y = _blobs_df(n_per=80)
+    bb = LeadXBackbone(n_bits=6, n_tables=3, hash_mode="origin",
+                       cat_bit_frac=0.0, random_state=0).fit(df)
+    expected = bb.fit_task(y).predict_proba(df)
+    bb.save(tmp_path / "bb")
+    loaded = LeadXBackbone.load(tmp_path / "bb")
+    assert loaded.hash_mode == "origin"
+    assert loaded.cat_bit_frac == 0.0
+    np.testing.assert_allclose(loaded.fit_task(y).predict_proba(df), expected, rtol=1e-6)

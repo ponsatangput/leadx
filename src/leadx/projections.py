@@ -5,6 +5,28 @@ import numpy as np
 from sklearn.metrics import normalized_mutual_info_score
 
 
+def _balanced_thresholds(proj: np.ndarray) -> np.ndarray:
+    """threshold ต่อ bit ที่ให้ split ใกล้ 50/50 ที่สุดเท่าที่ค่าในคอลัมน์อนุญาต
+
+    continuous (unique หมด) ≈ median; แต่ discrete atoms (เช่น projection ของ one-hot
+    ที่ค่าซ้ำตาม category) median อาจตกบน atom ของ majority แล้ว `> median` ให้ bit
+    ตายสนิท (minority=0) — เลือกจุดตัดระหว่าง unique values ที่ mass split ใกล้ครึ่ง
+    ที่สุดแทน แล้ววาง threshold กึ่งกลางช่องว่าง (กัน tie แตกไม่แน่นอน)"""
+    n = proj.shape[0]
+    srt = np.sort(proj, axis=0)
+    t = np.empty(proj.shape[1], dtype=np.float32)
+    for j in range(proj.shape[1]):
+        col = srt[:, j]
+        cuts = np.nonzero(col[:-1] < col[1:])[0]
+        if len(cuts) == 0:
+            t[j] = col[0]  # คอลัมน์ค่าคงที่ — ไม่มีจุดตัดให้เลือก (bit ตายโดยข้อมูลเอง)
+            continue
+        frac = (cuts + 1) / n
+        best = cuts[int(np.argmin(np.abs(frac - 0.5)))]
+        t[j] = (col[best] + col[best + 1]) / 2.0
+    return t
+
+
 def _binary_entropy(p: np.ndarray) -> np.ndarray:
     p = np.clip(p, 1e-12, 1 - 1e-12)
     return -(p * np.log(p) + (1 - p) * np.log(1 - p))
@@ -41,8 +63,8 @@ class ProjectionBank:
     strategy : {"unsupervised", "supervised"}
         supervised ใช้ label คัด bits (cross-fitted IG); fallback ถ้า seeds < min
     hash_mode : {"median", "origin"}
-        "median" (default) — threshold = median(w·x): ทุก bit balanced โดยโครงสร้าง
-        ไม่ต้องคัด/resample; "origin" — ตัดที่ 0 + balance-select machinery ดั้งเดิม
+        "median" (default) — tie-aware threshold (~median): split ใกล้ 50/50 สุด
+        เท่าที่ค่าอนุญาต ไม่ต้องคัด/resample; "origin" — ตัดที่ 0 + balance-select ดั้งเดิม
     cat_bit_frac : "auto" | float
         (median mode) สัดส่วน bits ที่ project เฉพาะ categorical dims ตาม cat_mask
         ที่ส่งเข้า fit — cat bit + median threshold = balanced bipartition ของ
@@ -162,9 +184,9 @@ class ProjectionBank:
         return C
 
     def _fit_table_median(self, S, y_s, rng):
-        """median-threshold: ทุก bit balanced 50/50 โดยโครงสร้าง — ไม่ต้องคัด balance/
-        resample เลย. unsupervised = สุ่ม B ทิศ (QR); supervised = oversample แล้วจัด
-        อันดับด้วย cross-fitted IG (เรียงมาก→น้อย เพื่อ prefix masking)"""
+        """tie-aware threshold (~median): split ใกล้ 50/50 สุดเท่าที่ค่าอนุญาต —
+        ไม่ต้องคัด balance/resample. unsupervised = สุ่ม B ทิศ (QR); supervised =
+        oversample แล้วจัดอันดับด้วย cross-fitted IG (เรียงมาก→น้อย เพื่อ prefix masking)"""
         d = S.shape[1]
         if self._cat_mask is not None:
             C = self._typed_candidates(d, rng)
@@ -177,7 +199,7 @@ class ProjectionBank:
                 Q2, _ = np.linalg.qr(rng.standard_normal((d, min(d, self.n_bits - C.shape[1]))))
                 C = np.hstack([C, Q2[:, : self.n_bits - C.shape[1]]])
         proj = S @ C
-        t = np.median(proj, axis=0)
+        t = _balanced_thresholds(proj)
         bits = proj > t
         if self.strategy_ == "supervised":
             perm = rng.permutation(len(S))

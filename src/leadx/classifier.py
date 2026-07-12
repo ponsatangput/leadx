@@ -151,7 +151,8 @@ class LeadX:
             Z_bg = Z_bg * self.feature_weights_
         if self.tune:
             tuner = Tuner(grid=self.grid, mode=self.mode,
-                          cat_bit_frac=self.cat_bit_frac, random_state=self.random_state)
+                          cat_bit_frac=self.cat_bit_frac, hash_mode=self.hash_mode,
+                          random_state=self.random_state)
             best = tuner.tune(Z, y, Z_background=Z_bg, cat_mask=self.encoder_.cat_mask_)
             self.tuning_results_ = tuner.results_
             cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights",
@@ -165,14 +166,22 @@ class LeadX:
                    "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg,
                    "cat_bit_frac": self.cat_bit_frac}
         self.config_ = cfg
-        bank = ProjectionBank(
-            n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
-            hash_mode=self.hash_mode, cat_bit_frac=cfg["cat_bit_frac"],
-            random_state=self.random_state,
-        )
-        bank.fit(Z, y if self.mode == "two_class" else None,
-                 cat_mask=self.encoder_.cat_mask_)
-        self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
+        if self.tune:
+            # ใช้ prefix ของ bank ที่ Tuner ประเมินจริง — สิ่งที่ deploy = สิ่งที่วัด
+            # (prefix slice ถูกต้องเพราะ codes ที่ประเมิน = mask_codes ของ bank นี้เอง)
+            bank = tuner.best_bank_
+            P = np.ascontiguousarray(bank.P_[: cfg["n_tables"], :, : cfg["n_bits"]])
+            thr = np.ascontiguousarray(bank.thresholds_[: cfg["n_tables"], : cfg["n_bits"]])
+            self.hasher_ = HashEnsemble(P, thr)
+        else:
+            bank = ProjectionBank(
+                n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
+                hash_mode=self.hash_mode, cat_bit_frac=cfg["cat_bit_frac"],
+                random_state=self.random_state,
+            )
+            bank.fit(Z, y if self.mode == "two_class" else None,
+                     cat_mask=self.encoder_.cat_mask_)
+            self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         codes = self.hasher_.transform(Z)
         bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
         self.scorer_ = SeedScorer(
@@ -279,6 +288,7 @@ class LeadX:
             "chunk_size": self.chunk_size,
             "encoder": self.encoder_.to_dict(),
             "feature_weighting": self.feature_weighting,
+            "hash_mode": self.hash_mode,
             "pu_lo": self._pu_lo,
             "pu_span": self._pu_span,
             "pi": self._pi,
@@ -302,6 +312,8 @@ class LeadX:
             n_tables=cfg["n_tables"], m=cfg["m"], strategy=cfg["strategy"],
             weights=cfg["weights"], feature_weighting=meta.get("feature_weighting", "none"),
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
+            hash_mode=meta.get("hash_mode", "median"),
+            cat_bit_frac=cfg["cat_bit_frac"],
             chunk_size=meta["chunk_size"],
         )
         clf._pi = meta.get("pi")

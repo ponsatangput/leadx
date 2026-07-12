@@ -167,6 +167,7 @@ class LeadXBackbone:
             np.save(path / "feature_weights.npy", self.feature_weights_)
         meta = {
             "n_bits": self.n_bits, "n_tables": self.n_tables,
+            "hash_mode": self.hash_mode, "cat_bit_frac": self.cat_bit_frac,
             "random_state": self.random_state, "chunk_size": self.chunk_size,
             "encoder": self.encoder_.to_dict(), "polars_version": pl.__version__,
         }
@@ -177,6 +178,8 @@ class LeadXBackbone:
         path = Path(path)
         meta = json.loads((path / "meta.json").read_text())
         bb = cls(n_bits=meta["n_bits"], n_tables=meta["n_tables"],
+                 hash_mode=meta.get("hash_mode", "median"),
+                 cat_bit_frac=meta.get("cat_bit_frac", "auto"),
                  random_state=meta["random_state"], chunk_size=meta["chunk_size"])
         bb.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
         thr_file = path / "thresholds.npy"
