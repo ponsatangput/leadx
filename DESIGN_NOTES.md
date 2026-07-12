@@ -134,6 +134,21 @@ lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = 
 - **predict_proba ภายใต้ lift**: P(y=1|x) ≈ π·lift (SCAR) clip [0,1] — probability
   หยาบ ranking คงเดิม
 
+## 5.3 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
+
+**Feature bootstrap / random subspace ต่อ table** (สุ่ม subset ของ features ให้แต่ละ
+hash table) — หวังแก้ noise dilution แบบ unsupervised (รักษา backbone reuse):
+
+| case | full | sqrt(D) | D/4 | D/2 |
+|---|---|---|---|---|
+| 8 signal + 192 noise (D=200) | 0.796 | 0.798 | 0.756 | 0.793 |
+| dense signal (D=40) | **0.955** | 0.913 | 0.936 | 0.948 |
+
+**ผล: ปฏิเสธ** — ไม่ช่วยโจทย์เป้าหมาย (SNR เฉลี่ยต่อ projection ไม่เปลี่ยน แค่สับตำแหน่ง)
+และทำร้าย dense-signal จริง (ตัด features = หั่นทิศ signal ร่วม) **บทเรียน:** สู้ noise
+dilution ต้องมี "ความรู้เรื่อง relevance" (feature_weighting ใช้ y) ไม่ใช่แค่ "ความหลากหลาย"
+— ไม่มีทางลัด unsupervised ง่ายๆ, tension accuracy↔reuse ยังอยู่ครบ
+
 ## 6. ทิศทางที่พักไว้ (พิจารณา v2)
 
 - **median-threshold hashing** — offset hashing (threshold = median ของ `w·x` แทนตัดที่ 0) → balanced bit โดยอัตโนมัติ, ลบ bit-test machinery, ไม่บิดข้อมูล (LSH ไม่จำเป็นต้องผ่าน origin)
