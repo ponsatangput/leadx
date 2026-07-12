@@ -149,7 +149,7 @@ score(bucket) = (n_pos + m·π) / (n_total + m)
 | `alpha` | float (default 2) | shrink-toward-1 strength ของ lift — กล่องหลักฐานน้อยถูกดึงเข้า 1 (กัน outlier กล่องจิ๋ว) |
 | `agg` | `"mean"` (default) / `"log"` | รวม lift ข้าม tables แบบ arithmetic / geometric (NB-style) |
 | `m` | float (default 10) | smoothing strength (สำหรับ `"prop"`) |
-| `hash_mode` | `"median"` (default) / `"origin"` | จุดตัดของ hyperplane: median ของ `w·x` (balanced โดยโครงสร้าง, robust, เร็ว) / ตัดที่ 0 (แบบดั้งเดิม + balance-select machinery) |
+| `hash_mode` | `"median"` (default) / `"origin"` | จุดตัดของ hyperplane: median ของ `w·x` (balanced โดยโครงสร้าง, fit เร็วกว่า ~15x, robust ต่อ input ไม่ centered; **AUC เสมอ origin** — paired 25 คู่ diff +0.001±0.015) / ตัดที่ 0 (ดั้งเดิม + balance-select) |
 | `chunk_size` | int (default 1M) | ขนาด chunk ตอน predict — คุม peak memory |
 
 ---

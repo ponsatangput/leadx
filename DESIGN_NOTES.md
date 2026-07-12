@@ -143,7 +143,11 @@ lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = 
   path → fit เร็วขึ้น ~15x และไม่มีสมมุติฐานให้ผิดอีก
 - **ฆ่า failure mode "input ไม่ centered"** — threshold เลื่อนตามข้อมูลเอง (aniso+offset:
   0.818 → 0.875); origin mode ยังอยู่เพื่อ backward compat
-- accuracy ผ่าน facade: median ≥ origin ใน 5/6 dataset-seeds (mean 0.889 vs 0.884)
+- **accuracy: เสมอกันทางสถิติ** — paired 25 คู่ (5 families × 5 seeds): diff
+  +0.001 ± 0.015, median ชนะ 12/25. รายครอบครัว: normal +0.011, noisy +0.009,
+  skewed +0.002, imbalanced −0.006, heavy-tail −0.011 (เคสเดียวที่ origin มีแต้มต่อ
+  — ใช้ hash_mode="origin" ได้ถ้าจำเป็น). จุดขายคือ speed/robustness/simplicity
+  ไม่ใช่ความแม่น
 - supervised ยังใช้ oversample + cross-fitted IG ranking บน median bits
 
 ### Shared feature weights (`backbone.fit(df, y_ref=...)`)
