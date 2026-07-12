@@ -72,7 +72,7 @@ class LeadX:
     def __init__(self, mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
                  strategy="unsupervised", weights="mean", grid=None,
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
-                 chunk_size=1_000_000, random_state=0):
+                 hash_mode="median", chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if feature_weighting not in ("none", "corr"):
@@ -89,6 +89,7 @@ class LeadX:
         self.score_type = score_type
         self.alpha = alpha
         self.agg = agg
+        self.hash_mode = hash_mode
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -146,10 +147,10 @@ class LeadX:
         self.config_ = cfg
         bank = ProjectionBank(
             n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
-            random_state=self.random_state,
+            hash_mode=self.hash_mode, random_state=self.random_state,
         )
         bank.fit(Z, y if self.mode == "two_class" else None)
-        self.hasher_ = HashEnsemble(bank.P_)
+        self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         codes = self.hasher_.transform(Z)
         bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
         self.scorer_ = SeedScorer(
@@ -243,6 +244,7 @@ class LeadX:
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "projections.npy", self.hasher_.P)
+        np.save(path / "thresholds.npy", self.hasher_.thresholds)
         tables = pl.concat([
             t.with_columns(table=pl.lit(k).cast(pl.Int32))
             for k, t in enumerate(self.scorer_.tables_)
@@ -289,7 +291,9 @@ class LeadX:
         fw = meta.get("feature_weights")
         clf.feature_weights_ = None if fw is None else np.asarray(fw, dtype=np.float32)
         clf.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
-        clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"))
+        thr_file = path / "thresholds.npy"
+        thresholds = np.load(thr_file) if thr_file.exists() else None  # model เก่า → 0
+        clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         scorer = SeedScorer(
             mode=meta["mode"], m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],

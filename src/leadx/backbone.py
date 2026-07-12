@@ -32,9 +32,11 @@ class LeadXBackbone:
     random_state : int
     """
 
-    def __init__(self, n_bits=16, n_tables=15, random_state=0, chunk_size=1_000_000):
+    def __init__(self, n_bits=16, n_tables=15, hash_mode="median",
+                 random_state=0, chunk_size=1_000_000):
         self.n_bits = n_bits
         self.n_tables = n_tables
+        self.hash_mode = hash_mode
         self.random_state = random_state
         self.chunk_size = chunk_size
 
@@ -44,9 +46,9 @@ class LeadXBackbone:
         Z = self.encoder_.transform(df)
         bank = ProjectionBank(
             n_tables=self.n_tables, n_bits=self.n_bits, strategy="unsupervised",
-            random_state=self.random_state,
+            hash_mode=self.hash_mode, random_state=self.random_state,
         ).fit(Z)
-        self.hasher_ = HashEnsemble(bank.P_)
+        self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         self.diagnostics_ = bank.diagnostics()
         self._seed_codes = self.hasher_.transform(Z, chunk_size=self.chunk_size)
         return self
@@ -122,6 +124,7 @@ class LeadXBackbone:
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "projections.npy", self.hasher_.P)
+        np.save(path / "thresholds.npy", self.hasher_.thresholds)
         np.save(path / "seed_codes.npy", self._seed_codes)
         meta = {
             "n_bits": self.n_bits, "n_tables": self.n_tables,
@@ -137,7 +140,9 @@ class LeadXBackbone:
         bb = cls(n_bits=meta["n_bits"], n_tables=meta["n_tables"],
                  random_state=meta["random_state"], chunk_size=meta["chunk_size"])
         bb.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
-        bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"))
+        thr_file = path / "thresholds.npy"
+        thresholds = np.load(thr_file) if thr_file.exists() else None  # backbone เก่า → 0
+        bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         bb._seed_codes = np.load(path / "seed_codes.npy")
         bb.diagnostics_ = {"note": "loaded — projection diagnostics ไม่ถูกบันทึก"}
         return bb

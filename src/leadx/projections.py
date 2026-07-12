@@ -54,13 +54,17 @@ class ProjectionBank:
     """
 
     def __init__(self, n_tables=10, n_bits=16, strategy="unsupervised",
-                 oversample=10, balance_min=0.40, redundancy_max=0.30,
-                 sample_size=100_000, min_seeds_per_class=50, random_state=0):
+                 hash_mode="median", oversample=10, balance_min=0.40,
+                 redundancy_max=0.30, sample_size=100_000,
+                 min_seeds_per_class=50, random_state=0):
         if strategy not in ("unsupervised", "supervised"):
             raise ValueError(f"strategy ไม่รู้จัก: {strategy}")
+        if hash_mode not in ("median", "origin"):
+            raise ValueError(f"hash_mode ไม่รู้จัก: {hash_mode}")
         self.n_tables = n_tables
         self.n_bits = n_bits
         self.strategy = strategy
+        self.hash_mode = hash_mode
         self.oversample = oversample
         self.balance_min = balance_min
         self.redundancy_max = redundancy_max
@@ -72,16 +76,18 @@ class ProjectionBank:
         rng = np.random.default_rng(self.random_state)
         Z = np.asarray(Z, dtype=np.float32)
         n = Z.shape[0]
-        # Contract: input ต้อง centered (FeatureEncoder ทำให้แล้ว) — hyperplane ผ่าน origin
-        # ถ้า mean เบ้แรง เกณฑ์ balance จะคัดทิ้ง bits ที่ align กับทิศ offset อย่างเป็นระบบ
-        col_mean = Z.mean(axis=0)
-        col_std = Z.std(axis=0) + 1e-12
-        if np.abs(col_mean / col_std).max() > 0.5:
-            warnings.warn(
-                "input ไม่ centered (|mean| > 0.5*std ในบาง column) — ProjectionBank คาดหวัง "
-                "ข้อมูลที่ standardize แล้ว (ผ่าน FeatureEncoder) ไม่งั้นเกณฑ์ balance จะ "
-                "anti-select ทิศทางที่มี offset และ score จะเสียหายรุนแรง"
-            )
+        if self.hash_mode == "origin":
+            # Contract (origin mode): input ต้อง centered — hyperplane ผ่าน origin
+            # ถ้า mean เบ้แรง เกณฑ์ balance จะคัดทิ้ง bits ที่ align กับทิศ offset
+            # (median mode ไม่มีปัญหานี้ — threshold เลื่อนตามข้อมูลเอง)
+            col_mean = Z.mean(axis=0)
+            col_std = Z.std(axis=0) + 1e-12
+            if np.abs(col_mean / col_std).max() > 0.5:
+                warnings.warn(
+                    "input ไม่ centered (|mean| > 0.5*std ในบาง column) — origin mode "
+                    "คาดหวังข้อมูลที่ standardize แล้ว ไม่งั้นเกณฑ์ balance จะ anti-select "
+                    "ทิศทางที่มี offset; พิจารณา hash_mode='median' (default)"
+                )
         self.strategy_ = self.strategy
         if self.strategy == "supervised":
             counts = np.bincount(np.asarray(y).astype(int)) if y is not None else np.array([0])
@@ -94,12 +100,53 @@ class ProjectionBank:
         idx = rng.permutation(n)[: min(n, self.sample_size)]
         S = Z[idx]
         y_s = np.asarray(y, dtype=np.float64)[idx] if self.strategy_ == "supervised" else None
-        tables, self._table_diag = [], []
+        tables, thresholds, self._table_diag = [], [], []
         for _ in range(self.n_tables):
-            tables.append(self._fit_table(S, y_s, rng))
-        self.P_ = np.stack(tables).astype(np.float32)  # (K, D, B)
+            if self.hash_mode == "median":
+                C_k, t_k = self._fit_table_median(S, y_s, rng)
+            else:
+                C_k = self._fit_table(S, y_s, rng)
+                t_k = np.zeros(self.n_bits, dtype=np.float32)
+            tables.append(C_k)
+            thresholds.append(t_k)
+        self.P_ = np.stack(tables).astype(np.float32)          # (K, D, B)
+        self.thresholds_ = np.stack(thresholds).astype(np.float32)  # (K, B)
         self._diversity = self._compute_diversity(S[:20_000])
         return self
+
+    def _fit_table_median(self, S, y_s, rng):
+        """median-threshold: ทุก bit balanced 50/50 โดยโครงสร้าง — ไม่ต้องคัด balance/
+        resample เลย. unsupervised = สุ่ม B ทิศ (QR); supervised = oversample แล้วจัด
+        อันดับด้วย cross-fitted IG (เรียงมาก→น้อย เพื่อ prefix masking)"""
+        d = S.shape[1]
+        if self.strategy_ == "supervised":
+            C = self._candidates(d, rng)                     # oversample × n_bits
+        else:
+            Q, _ = np.linalg.qr(rng.standard_normal((d, min(d, self.n_bits))))
+            C = Q[:, : self.n_bits]
+            while C.shape[1] < self.n_bits:                  # กรณี n_bits > d
+                Q2, _ = np.linalg.qr(rng.standard_normal((d, min(d, self.n_bits - C.shape[1]))))
+                C = np.hstack([C, Q2[:, : self.n_bits - C.shape[1]]])
+        proj = S @ C
+        t = np.median(proj, axis=0)
+        bits = proj > t
+        if self.strategy_ == "supervised":
+            perm = rng.permutation(len(S))
+            h1, h2 = perm[: len(S) // 2], perm[len(S) // 2 :]
+            quality = np.minimum(_info_gain(bits[h1], y_s[h1]), _info_gain(bits[h2], y_s[h2]))
+            sel = np.argsort(-quality)[: self.n_bits]
+            C, t, bits = C[:, sel], t[sel], bits[:, sel]
+        minority = np.minimum(bits.mean(axis=0), 1.0 - bits.mean(axis=0))
+        Bc = bits.astype(np.float32)
+        Bc = (Bc - Bc.mean(axis=0)) / (Bc.std(axis=0) + np.float32(1e-7))
+        corr_m = np.abs(Bc.T @ Bc) / len(S)
+        np.fill_diagonal(corr_m, 0.0)
+        self._table_diag.append({
+            "balance": [float(b) for b in minority],
+            "max_redundancy": float(corr_m.max()),
+            "n_eff": self._n_eff(_pack_bits(bits)),
+        })
+        return C, t.astype(np.float32)
 
     def _candidates(self, d: int, rng) -> np.ndarray:
         """สุ่มเกิน oversample เท่า, QR orthogonalize เป็น block ละ <= d คอลัมน์"""
@@ -190,7 +237,10 @@ class ProjectionBank:
         if self.n_tables < 2:
             return 0.0
         b = min(8, self.n_bits)  # ใช้ prefix 8 bits — NMI บน partition ละเอียดเกินจะ saturate
-        parts = [_pack_bits((S @ self.P_[k, :, :b]) > 0) for k in range(self.n_tables)]
+        parts = [
+            _pack_bits((S @ self.P_[k, :, :b]) > self.thresholds_[k, :b])
+            for k in range(self.n_tables)
+        ]
         nmis = [
             normalized_mutual_info_score(parts[i], parts[j])
             for i in range(len(parts)) for j in range(i + 1, len(parts))

@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -23,7 +25,8 @@ def test_shape_and_selected_bits_pass_balance():
 
 def test_redundancy_bounded():
     Z = _anisotropic_data()
-    bank = ProjectionBank(n_tables=2, n_bits=8, redundancy_max=0.30, random_state=1).fit(Z)
+    bank = ProjectionBank(n_tables=2, n_bits=8, redundancy_max=0.30,
+                          hash_mode="origin", random_state=1).fit(Z)
     for t in bank.diagnostics()["tables"]:
         assert t["max_redundancy"] < 0.30 + 1e-9
 
@@ -31,7 +34,7 @@ def test_redundancy_bounded():
 def test_bits_ordered_by_quality_descending():
     """จำเป็นต่อ prefix masking — bit แรกต้องคุณภาพดีสุด"""
     Z = _anisotropic_data()
-    bank = ProjectionBank(n_tables=1, n_bits=8, random_state=2).fit(Z)
+    bank = ProjectionBank(n_tables=1, n_bits=8, hash_mode="origin", random_state=2).fit(Z)
     bal = bank.diagnostics()["tables"][0]["balance"]
     assert all(bal[i] >= bal[i + 1] - 1e-9 for i in range(len(bal) - 1))
 
@@ -70,3 +73,30 @@ def test_supervised_guard_falls_back_when_seeds_too_few():
     with pytest.warns(UserWarning, match="fallback"):
         bank = ProjectionBank(n_tables=1, n_bits=4, strategy="supervised", random_state=0).fit(X, y)
     assert bank.strategy_ == "unsupervised"
+
+
+def test_median_mode_balanced_without_selection_machinery():
+    """hash_mode='median' (default): balanced โดยโครงสร้างแม้ข้อมูลเบ้+offset — ไม่ resample"""
+    Z = _anisotropic_data()  # กรณีที่เคยทำให้ origin mode resample หนัก
+    with pytest.warns() if False else warnings.catch_warnings():
+        warnings.simplefilter("error")  # ต้องไม่มี warning ใดๆ (ไม่มี resample/relax/uncentered)
+        bank = ProjectionBank(n_tables=3, n_bits=8, random_state=0).fit(Z)
+    assert bank.P_.shape == (3, 20, 8)
+    assert bank.thresholds_.shape == (3, 8)
+    diag = bank.diagnostics()
+    for t in diag["tables"]:
+        assert all(b >= 0.45 for b in t["balance"])  # median → เกือบ 50/50 เป๊ะ
+
+
+def test_origin_mode_still_available():
+    Z = _anisotropic_data(n=2000)
+    bank = ProjectionBank(n_tables=2, n_bits=6, hash_mode="origin", random_state=0).fit(Z)
+    assert np.all(bank.thresholds_ == 0.0)
+
+
+def test_median_mode_supervised_ranks_by_ig():
+    X, y = _labeled_data()
+    bank = ProjectionBank(n_tables=1, n_bits=4, strategy="supervised", random_state=0).fit(X, y)
+    assert bank.strategy_ == "supervised"
+    alignments = np.abs(bank.P_[0, 0, :])
+    assert alignments[0] == alignments.max()  # bit แรกจับแกน signal

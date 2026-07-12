@@ -48,3 +48,31 @@ def test_prefix_masking_is_nested():
 def test_rejects_over_64_bits():
     with pytest.raises(ValueError):
         HashEnsemble(np.zeros((1, 10, 65), dtype=np.float32))
+
+
+def test_thresholds_offset_hashing():
+    """HashEnsemble รองรับ per-bit thresholds: bit = (z@p > t) — LSH ไม่ต้องผ่าน origin"""
+    rng = np.random.default_rng(3)
+    Z = rng.standard_normal((300, 8)).astype(np.float32)
+    P = rng.standard_normal((2, 8, 6)).astype(np.float32)
+    t = np.stack([np.median(Z @ P[k], axis=0) for k in range(2)]).astype(np.float32)
+    h = HashEnsemble(P, thresholds=t)
+    codes = h.transform(Z)
+    # เทียบ naive
+    powers = np.uint64(1) << np.arange(5, -1, -1, dtype=np.uint64)
+    for k in range(2):
+        naive = ((Z @ P[k]) > t[k]).astype(np.uint64) @ powers
+        np.testing.assert_array_equal(codes[:, k], naive)
+    # ทุก bit ควร balanced ~50/50 (threshold = median)
+    for k in range(2):
+        bits = (Z @ P[k]) > t[k]
+        assert np.abs(bits.mean(axis=0) - 0.5).max() < 0.05
+
+
+def test_thresholds_default_zero_backward_compat():
+    rng = np.random.default_rng(4)
+    Z = rng.standard_normal((100, 8)).astype(np.float32)
+    P = rng.standard_normal((2, 8, 6)).astype(np.float32)
+    np.testing.assert_array_equal(
+        HashEnsemble(P).transform(Z),
+        HashEnsemble(P, thresholds=np.zeros((2, 6), np.float32)).transform(Z))

@@ -95,7 +95,7 @@ class Tuner:
                 bank.fit(Z, y if self.mode == "two_class" else None)
             if strategy == "supervised" and bank.strategy_ == "unsupervised":
                 continue  # guard fallback แล้ว — ประเมินซ้ำกับ unsupervised ไม่มีประโยชน์
-            hasher = HashEnsemble(bank.P_)
+            hasher = HashEnsemble(bank.P_, bank.thresholds_)
             codes = hasher.transform(Z)
             codes_bg = hasher.transform(Z_background) if Z_background is not None else None
             for b, k, m, w, st, al, ag in itertools.product(
