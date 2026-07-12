@@ -16,6 +16,9 @@ DEFAULT_GRID = {
     "m": [1.0, 10.0, 50.0],
     "weights": ["mean", "coverage"],
     "strategy": ["unsupervised", "supervised"],
+    "score_type": ["prop", "lift"],
+    "alpha": [0.5, 2.0, 10.0],
+    "agg": ["mean", "log"],
 }
 
 
@@ -95,15 +98,23 @@ class Tuner:
             hasher = HashEnsemble(bank.P_)
             codes = hasher.transform(Z)
             codes_bg = hasher.transform(Z_background) if Z_background is not None else None
-            for b, k, m, w in itertools.product(
+            for b, k, m, w, st, al, ag in itertools.product(
                 self.grid["n_bits"], self.grid["n_tables"],
                 self.grid["m"], self.grid["weights"],
+                self.grid["score_type"], self.grid["alpha"], self.grid["agg"],
             ):
+                # dedupe: parameter ที่ไม่มีผลกับ score_type นั้นๆ ประเมินค่าแรกค่าเดียว
+                # (prop ไม่ใช้ alpha/agg, lift ไม่ใช้ m) — กัน grid บวมด้วย combo ซ้ำ
+                if st == "prop" and (al != self.grid["alpha"][0] or ag != self.grid["agg"][0]):
+                    continue
+                if st == "lift" and m != self.grid["m"][0]:
+                    continue
                 fold_scores = []
                 for f in range(n_folds):
                     tr, va = folds != f, folds == f
                     cb = mask_codes(codes, b, b_max)[:, :k]
-                    scorer = SeedScorer(mode=self.mode, m=m, weights=w, n_bits=b)
+                    scorer = SeedScorer(mode=self.mode, m=m, weights=w, n_bits=b,
+                                        score_type=st, alpha=al, agg=ag)
                     if self.mode == "two_class":
                         scorer.fit(cb[tr], y[tr])
                         fold_scores.append(roc_auc_score(y[va], scorer.score(cb[va])))
@@ -115,7 +126,8 @@ class Tuner:
                         fold_scores.append(average_precision_score(lbl, s))
                 rows.append({
                     "strategy": strategy, "n_bits": b, "n_tables": k,
-                    "m": m, "weights": w, "score": float(np.mean(fold_scores)),
+                    "m": m, "weights": w, "score_type": st, "alpha": al, "agg": ag,
+                    "score": float(np.mean(fold_scores)),
                 })
         self.results_ = pl.DataFrame(rows).sort("score", descending=True)
         self.best_ = self.results_.row(0, named=True)

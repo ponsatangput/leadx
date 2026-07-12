@@ -42,7 +42,8 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 | ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — model คือ dict lookup |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
 | **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
-| **imbalanced tabular** ที่มี labeled negatives | ❌ **ไม่** — boosting ชนะขาด (PR-AUC สูงกว่า ~3×) |
+| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **ใช่** — `score_type="lift"` แบนราบตาม ratio ขณะที่ boosting ทรุด (ตัดกันที่ ~0.3%) |
+| **imbalanced ปานกลาง** (1–10%) ที่มี labeled negatives | ❌ **ไม่** — boosting ยังชนะ (PR-AUC สูงกว่า) |
 
 รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
 
@@ -144,7 +145,10 @@ score(bucket) = (n_pos + m·π) / (n_total + m)
 | `strategy` | `"unsupervised"` (default) / `"supervised"` | คัด projection vectors แบบไม่ใช้ / ใช้ label (auto-tune ลองทั้งคู่) |
 | `weights` | `"mean"` (default) / `"coverage"` | รวม score ข้าม tables แบบเฉลี่ยตรง / ถ่วงให้ table ที่ miss เยอะพูดเบาลง |
 | `feature_weighting` | `"none"` (default) / `"corr"` | ถ่วง feature ตาม \|corr กับ y\| ก่อน hash (แก้ noise dilution; two_class เท่านั้น; ปิด reuse) |
-| `m` | float (default 10) | smoothing strength |
+| `score_type` | `"prop"` (default) / `"lift"` | สัดส่วน smoothed / density ratio (lift) — lift เป็น **imbalance-invariant**: prior ไม่อยู่ในสูตร, fallback = 1 (เป็นกลาง), สเกลตีความได้ ("เข้มข้นกว่าค่าเฉลี่ย 3 เท่า") |
+| `alpha` | float (default 2) | shrink-toward-1 strength ของ lift — กล่องหลักฐานน้อยถูกดึงเข้า 1 (กัน outlier กล่องจิ๋ว) |
+| `agg` | `"mean"` (default) / `"log"` | รวม lift ข้าม tables แบบ arithmetic / geometric (NB-style) |
+| `m` | float (default 10) | smoothing strength (สำหรับ `"prop"`) |
 | `chunk_size` | int (default 1M) | ขนาด chunk ตอน predict — คุม peak memory |
 
 ---
@@ -286,6 +290,22 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 | 500k / 1M | fit time | 18s | **2s** | 0.2s |
 
 > ⚠️ บน imbalanced ที่มี labeled negatives — **gradient boosting ชนะขาด** leadx niche จริงคือ **PU** (ไม่มี labeled negative ให้ boosting ใช้): จัดอันดับ rare positives ได้ PR-AUC 0.23 **เท่ากับตอนมี label ครบ** เพราะ density approach เป็น PU โดยธรรมชาติ
+
+### Imbalance invariance ของ `score_type="lift"`
+
+ตรึง positive สัมบูรณ์ 2,000 ตัว แล้วไล่ imbalance 100 เท่า (test balanced, ROC-AUC) —
+[examples/imbalance_invariance.py](examples/imbalance_invariance.py):
+
+| pos rate | leadx lift(log) | HistGradBoost |
+|---|---|---|
+| 10% | 0.880 | **0.909** |
+| 1% | 0.889 | 0.901 |
+| 0.3% | **0.889** | 0.879 |
+| 0.1% | **0.883** | 0.846 |
+
+**leadx แบนราบตลอด** (prior ไม่อยู่ในสูตร lift) ขณะ boosting ทรุดตาม imbalance —
+**จุดตัด ~0.3%**: ต่ำกว่านั้น leadx ชนะแม้ใน two-class ที่มี label ครบ นี่คือ niche
+ที่สองของ leadx (คู่กับ PU): **rare-positive สุดโต่ง**
 
 ### Noise features & `feature_weighting`
 

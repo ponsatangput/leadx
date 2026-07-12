@@ -71,7 +71,8 @@ class LeadX:
 
     def __init__(self, mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
                  strategy="unsupervised", weights="mean", grid=None,
-                 feature_weighting="none", chunk_size=1_000_000, random_state=0):
+                 feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
+                 chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if feature_weighting not in ("none", "corr"):
@@ -85,6 +86,9 @@ class LeadX:
         self.weights = weights
         self.grid = grid
         self.feature_weighting = feature_weighting
+        self.score_type = score_type
+        self.alpha = alpha
+        self.agg = agg
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -132,11 +136,13 @@ class LeadX:
             tuner = Tuner(grid=self.grid, mode=self.mode, random_state=self.random_state)
             best = tuner.tune(Z, y, Z_background=Z_bg)
             self.tuning_results_ = tuner.results_
-            cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights")}
+            cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights",
+                                        "score_type", "alpha", "agg")}
         else:
             self.tuning_results_ = None
             cfg = {"strategy": self.strategy, "n_bits": self.n_bits,
-                   "n_tables": self.n_tables, "m": self.m, "weights": self.weights}
+                   "n_tables": self.n_tables, "m": self.m, "weights": self.weights,
+                   "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg}
         self.config_ = cfg
         bank = ProjectionBank(
             n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
@@ -148,10 +154,12 @@ class LeadX:
         bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
         self.scorer_ = SeedScorer(
             mode=self.mode, m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
+            score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
         ).fit(codes, y, background_codes=bg_codes)
+        self._pi = float(y.mean()) if self.mode == "two_class" else None
         # PU calibration: normalize ด้วยค่าคงที่จาก fit (batch-invariant) — spec ห้าม
         # ใช้ min/max ของ batch ที่กำลัง score
-        if self.mode == "pu":
+        if self.mode == "pu" and cfg["score_type"] != "lift":
             self._pu_lo, self._pu_span = pu_score_range(self.scorer_, codes, bg_codes)
         else:
             self._pu_lo, self._pu_span = None, None
@@ -196,7 +204,7 @@ class LeadX:
                 "miss rate > 30% — สาเหตุที่เป็นไปได้: n_bits มากไป หรือ seeds น้อยไป "
                 "ลองลด n_bits หรือเพิ่ม seeds"
             )
-        if self.mode == "pu":
+        if self.mode == "pu" and self.config_["score_type"] != "lift":
             s = normalize_pu(s, self._pu_lo, self._pu_span)
         return s
 
@@ -221,6 +229,9 @@ class LeadX:
         if self.mode != "two_class":
             raise ValueError("predict_proba ใช้ได้เฉพาะ two_class — PU ใช้ score_samples")
         p = self.score_samples(df)
+        if self.config_["score_type"] == "lift":
+            # SCAR: P(y=1|x) ~= pi * lift(x) — แปลงเป็น probability หยาบ (ranking คงเดิม)
+            p = np.clip(self._pi * p, 0.0, 1.0)
         return np.column_stack([1.0 - p, p])
 
     def save(self, path) -> None:
@@ -246,6 +257,7 @@ class LeadX:
             "feature_weighting": self.feature_weighting,
             "pu_lo": self._pu_lo,
             "pu_span": self._pu_span,
+            "pi": self._pi,
             "feature_weights": None if self.feature_weights_ is None
             else self.feature_weights_.tolist(),
             "polars_version": pl.__version__,
@@ -257,12 +269,17 @@ class LeadX:
         path = Path(path)
         meta = json.loads((path / "meta.json").read_text())
         cfg = meta["config"]
+        cfg.setdefault("score_type", "prop")
+        cfg.setdefault("alpha", 2.0)
+        cfg.setdefault("agg", "mean")
         clf = cls(
             mode=meta["mode"], tune=False, n_bits=cfg["n_bits"],
             n_tables=cfg["n_tables"], m=cfg["m"], strategy=cfg["strategy"],
             weights=cfg["weights"], feature_weighting=meta.get("feature_weighting", "none"),
+            score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
             chunk_size=meta["chunk_size"],
         )
+        clf._pi = meta.get("pi")
         clf.config_ = cfg
         clf.tuning_results_ = None
         clf._pu_lo = meta.get("pu_lo")
@@ -275,6 +292,7 @@ class LeadX:
         clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"))
         scorer = SeedScorer(
             mode=meta["mode"], m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
+            score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
         )
         all_tables = pl.read_parquet(path / "tables.parquet")
         scorer.tables_ = [

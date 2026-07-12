@@ -111,6 +111,29 @@ B มาก = bucket ละเอียด (แม่นขึ้น) แต่ 
 3. **coverage weights นับ `hit` จาก direct join ก่อน multi-probe** — table ที่ probe
    ช่วยกู้ได้เยอะถูกถ่วงเท่า table ที่ miss จริง — เป็น design choice (ค่า conservative)
 
+## 5.2 Lift scoring — design ที่ converge แล้ว (implemented)
+
+จากการหารือเรื่อง "คะแนนดิบ vs สัดส่วน": คะแนนดิบ (log-density) ปน "กล่องใหญ่" กับ
+"กล่องเข้มข้น" — สิ่งที่ถูกคือ **density ratio (lift)** เทียบ reference population:
+
+```
+lift(b) = (n_pos(b) + α) / (E[n_pos(b) | เป็นกลาง] + α),  E = N_pos · n_ref(b)/N_ref
+```
+
+- **imbalance-invariant**: class prior π ไม่อยู่ในสูตร → ranking ไม่สะเทือนตาม ratio
+  (ยืนยันเชิงประจักษ์: ตรึง 2,000 positives, ratio เปลี่ยน 100 เท่า → AUC แบนราบ
+  0.879–0.889 ขณะ HistGB ทรุด 0.909→0.846; จุดตัด ~0.3% pos rate)
+- **shrink-toward-1**: กล่องหลักฐานน้อยถูกดึงเข้า 1 (กัน outlier กล่องจิ๋ว lift พุ่ง —
+  ความแรง α ให้ Tuner เลือก; validate กับข้อมูลจริงอีกครั้ง)
+- **fallback = 1** (เป็นกลาง) — ภาษาเดียวทั้งระบบ: 1=ไม่มีหลักฐาน >1=บวก <1=ลบ
+  (แก้ปัญหา prior fallback คนละสเกลที่เคยต้องอาศัย normalize)
+- **reference ตรึงตอน fit** (batch-invariant): two_class = seeds ทั้งหมด, pu =
+  background (จำเป็น — lift ใน pu ไม่มี background จะ raise)
+- **aggregation**: arithmetic ("mean") vs geometric ("log", NB-style คูณ likelihood
+  ratio ข้าม tables) — Tuner ตัดสิน; วัดแล้ว log ดีกว่าเล็กน้อยและเสถียร
+- **predict_proba ภายใต้ lift**: P(y=1|x) ≈ π·lift (SCAR) clip [0,1] — probability
+  หยาบ ranking คงเดิม
+
 ## 6. ทิศทางที่พักไว้ (พิจารณา v2)
 
 - **median-threshold hashing** — offset hashing (threshold = median ของ `w·x` แทนตัดที่ 0) → balanced bit โดยอัตโนมัติ, ลบ bit-test machinery, ไม่บิดข้อมูล (LSH ไม่จำเป็นต้องผ่าน origin)

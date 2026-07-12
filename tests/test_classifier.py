@@ -34,7 +34,8 @@ def test_fit_with_tune_records_results():
     clf = LeadX(mode="two_class", tune=True, grid=grid, random_state=0)
     clf.fit(df, y)
     assert clf.tuning_results_ is not None
-    assert set(clf.config_) == {"strategy", "n_bits", "n_tables", "m", "weights"}
+    assert {"strategy", "n_bits", "n_tables", "m", "weights",
+            "score_type", "alpha", "agg"} <= set(clf.config_)
     assert "projections" in clf.diagnostics_
 
 
@@ -124,3 +125,31 @@ def test_two_class_rejects_single_class_y():
     df, _ = _blobs_df(n_per=30)
     with pytest.raises(ValueError, match="class"):
         LeadX(mode="two_class", tune=False, n_bits=4, n_tables=2).fit(df, np.ones(60))
+
+
+def test_lift_facade_end_to_end_and_batch_invariant():
+    df, y = _blobs_df(n_per=200)
+    clf = LeadX(mode="two_class", tune=False, n_bits=8, n_tables=5,
+                score_type="lift", alpha=2.0, agg="log", random_state=0).fit(df, y)
+    s = clf.score_samples(df)
+    assert roc_auc_score(y, s) > 0.95
+    assert s.max() > 1.0 and s.min() < 1.0  # สเกล lift จริง ไม่ถูก squash เป็น [0,1]
+    # batch invariance
+    halves = np.concatenate([clf.score_samples(df[:150]), clf.score_samples(df[150:])])
+    np.testing.assert_allclose(s, halves, rtol=1e-9)
+
+
+def test_lift_pu_facade_keeps_lift_scale(tmp_path):
+    rng = np.random.default_rng(3)
+    pos = rng.standard_normal((300, 5)) + 2.0
+    df_pos = pl.DataFrame({f"f{i}": pos[:, i] for i in range(5)})
+    allx = np.vstack([rng.standard_normal((700, 5)), pos[:100]])
+    df_all = pl.DataFrame({f"f{i}": allx[:, i] for i in range(5)})
+    clf = LeadX(mode="pu", tune=False, n_bits=6, n_tables=4,
+                score_type="lift", random_state=0).fit(df_pos, background=df_all)
+    s = clf.score_samples(df_all)
+    assert s[700:].mean() > 1.0 > s[:200].mean()  # positive เข้มข้น >1, ไกลๆ <1
+    # save/load รักษา config lift
+    clf.save(tmp_path / "m")
+    loaded = LeadX.load(tmp_path / "m")
+    np.testing.assert_allclose(loaded.score_samples(df_all), s, rtol=1e-6)

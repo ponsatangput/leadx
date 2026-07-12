@@ -98,3 +98,15 @@ def test_pu_task_scores_batch_invariant():
     whole = task.score_samples(df)
     halves = np.concatenate([task.score_samples(df[:200]), task.score_samples(df[200:])])
     np.testing.assert_allclose(whole, halves, rtol=1e-9)
+
+
+def test_fit_task_lift():
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((600, 6))
+    df = pl.DataFrame({f"f{i}": X[:, i] for i in range(6)})
+    y = (X[:, 0] > 0.8).astype(float)  # imbalanced ~20%
+    bb = LeadXBackbone(n_bits=10, n_tables=8, random_state=0).fit(df)
+    task = bb.fit_task(y, score_type="lift", alpha=2.0, agg="log")
+    s = task.score_samples(df)
+    assert roc_auc_score(y, s) > 0.75
+    assert s.max() > 1.0  # lift scale

@@ -104,3 +104,61 @@ def test_pu_with_background_uses_seed_rate():
     np.testing.assert_allclose(s[0], (2 + 1 * rho) / (4 + 1))
     np.testing.assert_allclose(s[1], (1 + 1 * rho) / (100 + 1))
     assert s[0] > s[1]
+
+
+# ---------- score_type="lift" ----------
+
+def test_lift_two_class_hand_computation():
+    # bucket5: 2 pos / 3 seeds | bucket9: 0 pos / 3 seeds | N_pos=2, N=6, alpha=1
+    # e(b) = N_pos * n_total(b) / N ; lift = (n_pos + a) / (e + a)
+    codes = np.array([[5], [5], [5], [9], [9], [9]], dtype=np.uint64)
+    y = np.array([1, 1, 0, 0, 0, 0], dtype=np.float64)
+    sc = SeedScorer(mode="two_class", score_type="lift", alpha=1.0,
+                    multi_probe=False, n_bits=4).fit(codes, y)
+    s = sc.score(np.array([[5], [9], [7]], dtype=np.uint64))
+    np.testing.assert_allclose(s[0], (2 + 1) / (2 * 3 / 6 + 1))  # 1.5
+    np.testing.assert_allclose(s[1], (0 + 1) / (2 * 3 / 6 + 1))  # 0.5
+    np.testing.assert_allclose(s[2], 1.0)  # bucket ว่าง → เป็นกลาง (ไม่ใช่ prior)
+
+
+def test_lift_pu_with_background_hand_computation():
+    # bucket1: 2 seeds / 4 bg | bucket2: 1 seed / 96 bg | N_seed=3, N_bg=100, alpha=1
+    seed_codes = np.array([[1], [1], [2]], dtype=np.uint64)
+    bg = np.array([[1]] * 4 + [[2]] * 96, dtype=np.uint64)
+    sc = SeedScorer(mode="pu", score_type="lift", alpha=1.0,
+                    multi_probe=False, n_bits=4).fit(seed_codes, np.ones(3),
+                                                     background_codes=bg)
+    s = sc.score(np.array([[1], [2]], dtype=np.uint64))
+    np.testing.assert_allclose(s[0], (2 + 1) / (3 * 4 / 100 + 1))   # ~2.679 เข้มข้น
+    np.testing.assert_allclose(s[1], (1 + 1) / (3 * 96 / 100 + 1))  # ~0.515 เจือจาง
+    assert s[0] > 1.0 > s[1]
+
+
+def test_lift_small_bucket_shrinks_toward_one():
+    # raw lift เท่ากัน (2.0) แต่หลักฐานต่างกัน 10 เท่า → กล่องจิ๋วถูกดึงเข้า 1 แรงกว่า
+    codes = np.array([[1]] * 1 + [[2]] * 10 + [[3]] * 11, dtype=np.uint64)
+    y = np.array([1] * 1 + [1] * 10 + [0] * 11, dtype=np.float64)
+    sc = SeedScorer(mode="two_class", score_type="lift", alpha=5.0,
+                    multi_probe=False, n_bits=4).fit(codes, y)
+    s = sc.score(np.array([[1], [2]], dtype=np.uint64))
+    lift_tiny, lift_big = s[0], s[1]
+    assert lift_big > lift_tiny > 1.0  # ทั้งคู่ >1 แต่กล่องหลักฐานหนาเชื่อได้มากกว่า
+
+
+def test_lift_log_agg_is_geometric_mean():
+    # 2 tables: query ตกกล่อง lift 1.5 (table0) และ 0.5 (table1), alpha=1
+    codes = np.array([[1, 7], [1, 7], [2, 8], [2, 8]], dtype=np.uint64)
+    y = np.array([1, 1, 0, 0], dtype=np.float64)
+    q = np.array([[1, 8]], dtype=np.uint64)
+    s_mean = SeedScorer(mode="two_class", score_type="lift", alpha=1.0, agg="mean",
+                        multi_probe=False, n_bits=4).fit(codes, y).score(q)
+    s_log = SeedScorer(mode="two_class", score_type="lift", alpha=1.0, agg="log",
+                       multi_probe=False, n_bits=4).fit(codes, y).score(q)
+    np.testing.assert_allclose(s_mean[0], (1.5 + 0.5) / 2)          # arithmetic
+    np.testing.assert_allclose(s_log[0], np.sqrt(1.5 * 0.5))        # geometric
+
+
+def test_lift_pu_without_background_raises():
+    codes = np.array([[1], [2]], dtype=np.uint64)
+    with pytest.raises(ValueError, match="background"):
+        SeedScorer(mode="pu", score_type="lift", n_bits=4).fit(codes, np.ones(2))

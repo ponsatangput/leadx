@@ -1,4 +1,5 @@
 import numpy as np
+import polars as pl
 import pytest
 
 from leadx.tuning import Tuner, stratified_folds
@@ -36,7 +37,8 @@ def test_tuner_finds_good_config_on_easy_data():
     X, y = _blobs()
     tuner = Tuner(grid=SMALL_GRID, n_folds=3, mode="two_class", random_state=0)
     best = tuner.tune(X, y)
-    assert set(best) == {"strategy", "n_bits", "n_tables", "m", "weights", "score"}
+    assert {"strategy", "n_bits", "n_tables", "m", "weights", "score",
+            "score_type", "alpha", "agg"} <= set(best)
     assert best["score"] > 0.9  # blobs แยกชัด — OOF AUC ต้องสูง
     # results_ ครอบคลุมทั้ง grid (2*2*2*1 = 8 configs ต่อ strategy ที่รอด)
     assert tuner.results_.height >= 8
@@ -77,3 +79,18 @@ def test_tuner_raises_on_tiny_minority_class():
     y[0] = 1.0  # minority มีตัวเดียว — เดิม n_folds=1 → train fold ว่าง → NaN crash ลึกๆ
     with pytest.raises(ValueError, match="2"):
         Tuner(grid=SMALL_GRID, mode="two_class").tune(X, y)
+
+
+def test_tuner_evaluates_lift_and_prop():
+    X, y = _blobs()
+    grid = {**SMALL_GRID, "score_type": ["prop", "lift"], "alpha": [1.0, 5.0],
+            "agg": ["mean", "log"]}
+    tuner = Tuner(grid=grid, n_folds=3, mode="two_class", random_state=0)
+    best = tuner.tune(X, y)
+    assert {"score_type", "alpha", "agg"} <= set(best)
+    assert set(tuner.results_["score_type"].unique()) == {"prop", "lift"}
+    assert best["score"] > 0.9
+    # dedupe: prop ไม่ควรถูกประเมินซ้ำต่อ alpha/agg (alpha/agg ไม่มีผลกับ prop)
+    n_prop = tuner.results_.filter(pl.col("score_type") == "prop").height
+    n_lift = tuner.results_.filter(pl.col("score_type") == "lift").height
+    assert n_lift == n_prop * 2 * 2 / 2  # lift: ×alpha×agg แต่ไม่คูณ m (2 ค่าใน grid)

@@ -30,30 +30,53 @@ class SeedScorer:
     → multi-probe (Hamming-1 neighbors) → prior fallback. รวมข้าม tables ด้วย mean
     หรือ coverage-weighted.
 
+    score_type="lift" (imbalance-invariant): score ต่อ bucket = smoothed lift
+    `(n_pos + α) / (E[n_pos|neutral] + α)` — เทียบความเข้มข้นของ positives กับ
+    reference population (two_class: seeds ทั้งหมด, pu: background ที่ตรึงตอน fit)
+    class prior ไม่อยู่ในสูตร → ranking ไม่สะเทือนตามความ imbalance. fallback = 1
+    (เป็นกลาง). กล่องหลักฐานน้อยถูก shrink เข้า 1 (กัน outlier กล่องจิ๋ว lift พุ่ง)
+
     Parameters
     ----------
     mode : {"two_class", "pu"}
     m : float
-        smoothing strength (m-estimate)
+        smoothing strength (m-estimate) — ใช้กับ score_type="prop"
     weights : {"mean", "coverage"}
-        วิธีรวม score ข้าม tables
+        วิธีถ่วงน้ำหนักข้าม tables
     multi_probe : bool
         เปิด Hamming-1 fallback สำหรับแถวที่ join ไม่เจอ (ต้องระบุ n_bits)
     n_bits : int | None
         จำนวน bits (จำเป็นเมื่อ multi_probe=True — ใช้กำหนดตำแหน่ง flip)
+    score_type : {"prop", "lift"}
+        "prop" — สัดส่วน smoothed (พฤติกรรมเดิม); "lift" — density ratio เทียบ reference
+    alpha : float
+        shrink-toward-1 strength ของ lift (ใช้กับ score_type="lift")
+    agg : {"mean", "log"}
+        รวม lift ข้าม tables แบบ arithmetic หรือ geometric (log-domain, NB-style)
+        — ใช้กับ score_type="lift" เท่านั้น
     """
 
     def __init__(self, mode="two_class", m=10.0, weights="mean",
-                 multi_probe=True, n_bits=None):
+                 multi_probe=True, n_bits=None,
+                 score_type="prop", alpha=2.0, agg="mean"):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if weights not in ("mean", "coverage"):
             raise ValueError(f"weights ไม่รู้จัก: {weights}")
+        if score_type not in ("prop", "lift"):
+            raise ValueError(f"score_type ไม่รู้จัก: {score_type}")
+        if agg not in ("mean", "log"):
+            raise ValueError(f"agg ไม่รู้จัก: {agg}")
+        if score_type == "lift" and alpha <= 0:
+            raise ValueError("lift ต้องการ alpha > 0 (กัน log(0) และกล่องหลักฐานว่าง)")
         self.mode = mode
         self.m = m
         self.weights = weights
         self.multi_probe = multi_probe
         self.n_bits = n_bits
+        self.score_type = score_type
+        self.alpha = alpha
+        self.agg = agg
 
     def fit(self, codes: np.ndarray, y: np.ndarray, background_codes=None) -> "SeedScorer":
         codes = np.asarray(codes, dtype=np.uint64)
@@ -63,23 +86,34 @@ class SeedScorer:
         if self.mode == "two_class":
             if not set(np.unique(y)) <= {0.0, 1.0}:
                 raise ValueError("two_class ต้องการ y เป็น 0/1")
-            self.prior_ = float(y.mean())
+            n_pos_total, n_total_all = float(y.sum()), float(len(y))
+            self.prior_ = 1.0 if self.score_type == "lift" else float(y.mean())
             for k in range(self.n_tables_):
                 g = (
                     pl.DataFrame({"code": codes[:, k], "y": y})
                     .group_by("code")
                     .agg(n_pos=pl.col("y").sum(), n_total=pl.len().cast(pl.Float64))
-                    .with_columns(
+                )
+                if self.score_type == "lift":
+                    # e(b) = จำนวน positive ที่คาดใน bucket ถ้าเป็นกลาง; shrink เข้า 1
+                    g = g.with_columns(
+                        score=(pl.col("n_pos") + self.alpha)
+                        / (n_pos_total * pl.col("n_total") / n_total_all + self.alpha)
+                    )
+                else:
+                    g = g.with_columns(
                         score=(pl.col("n_pos") + self.m * self.prior_)
                         / (pl.col("n_total") + self.m)
                     )
-                )
                 self.tables_.append(g.select("code", "score", "n_total"))
         elif background_codes is not None:
-            # PU + background: smoothed seed rate ต่อ bucket (spec §6)
+            # PU + background (reference ตรึงตอน fit): prop = smoothed seed rate,
+            # lift = smoothed density ratio เทียบ background
             background_codes = np.asarray(background_codes, dtype=np.uint64)
-            rho = codes.shape[0] / background_codes.shape[0]
-            self.prior_ = float(rho)
+            n_seed_total = float(codes.shape[0])
+            n_bg_total = float(background_codes.shape[0])
+            rho = n_seed_total / n_bg_total
+            self.prior_ = 1.0 if self.score_type == "lift" else float(rho)
             for k in range(self.n_tables_):
                 seed_g = (
                     pl.DataFrame({"code": codes[:, k]})
@@ -96,13 +130,24 @@ class SeedScorer:
                         pl.col("n_seed").fill_null(0.0),
                         pl.col("n_total").fill_null(0.0),
                     )
-                    .with_columns(
+                )
+                if self.score_type == "lift":
+                    g = g.with_columns(
+                        score=(pl.col("n_seed") + self.alpha)
+                        / (n_seed_total * pl.col("n_total") / n_bg_total + self.alpha)
+                    )
+                else:
+                    g = g.with_columns(
                         score=(pl.col("n_seed") + self.m * rho) / (pl.col("n_total") + self.m)
                     )
-                )
                 self.tables_.append(g.select("code", "score", "n_total"))
         else:
             # PU ไม่มี background: log-density (ranking score เท่านั้น — facade จะ normalize)
+            if self.score_type == "lift":
+                raise ValueError(
+                    "score_type='lift' ใน pu mode ต้องการ background (reference population "
+                    "เป็นตัวหารของ density ratio) — ส่ง background_codes"
+                )
             self.prior_ = 0.0
             for k in range(self.n_tables_):
                 g = (
@@ -129,8 +174,14 @@ class SeedScorer:
             "miss_rate_final": n_final_miss / (n * self.n_tables_),
         }
         if self.weights == "coverage" and hit.sum() > 0:
-            return per_table @ (hit / hit.sum())
-        return per_table.mean(axis=1)
+            w = hit / hit.sum()
+        else:
+            w = np.full(self.n_tables_, 1.0 / self.n_tables_)
+        if self.score_type == "lift" and self.agg == "log":
+            # geometric mean = คูณ likelihood ratio ข้าม tables (NB-style); lift > 0 เสมอ
+            # เพราะ alpha > 0 และ fallback = 1
+            return np.exp(np.log(per_table) @ w)
+        return per_table @ w
 
     def _score_table(self, col: np.ndarray, tbl: pl.DataFrame):
         joined = (

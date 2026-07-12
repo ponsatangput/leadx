@@ -66,7 +66,8 @@ class LeadXBackbone:
 
     def fit_task(self, y=None, mode="two_class", m=10.0, weights="mean",
                  n_bits=None, n_tables=None, seeds: pl.DataFrame | None = None,
-                 background: pl.DataFrame | None = None) -> "TaskModel":
+                 background: pl.DataFrame | None = None,
+                 score_type="prop", alpha=2.0, agg="mean") -> "TaskModel":
         """สร้างโมเดลต่อโจทย์จาก codes ที่ cache ไว้ (ถูกมาก — แค่ group-by)
 
         Parameters
@@ -105,13 +106,17 @@ class LeadXBackbone:
         bg_codes = None
         if background is not None:
             bg_codes = mask_codes(self.transform(background), b, self.n_bits)[:, :k]
-        scorer = SeedScorer(mode=mode, m=m, weights=weights, n_bits=b).fit(
+        scorer = SeedScorer(mode=mode, m=m, weights=weights, n_bits=b,
+                            score_type=score_type, alpha=alpha, agg=agg).fit(
             seed_codes, y, background_codes=bg_codes)
-        # PU calibration จาก fit (batch-invariant) — ดู scoring.pu_score_range
+        # PU calibration จาก fit (batch-invariant) — lift ไม่ต้อง (สเกลตีความได้ในตัว)
         pu_lo, pu_span = (
-            pu_score_range(scorer, seed_codes, bg_codes) if mode == "pu" else (None, None)
+            pu_score_range(scorer, seed_codes, bg_codes)
+            if (mode == "pu" and score_type != "lift") else (None, None)
         )
-        return TaskModel(self, scorer, b, k, mode, pu_lo, pu_span)
+        pi = float(y.mean()) if mode == "two_class" else None
+        return TaskModel(self, scorer, b, k, mode, pu_lo, pu_span,
+                         score_type=score_type, pi=pi)
 
     def save(self, path) -> None:
         path = Path(path)
@@ -143,7 +148,8 @@ class TaskModel:
 
     def __init__(self, backbone: LeadXBackbone, scorer: SeedScorer,
                  n_bits: int, n_tables: int, mode: str,
-                 pu_lo: float | None = None, pu_span: float | None = None):
+                 pu_lo: float | None = None, pu_span: float | None = None,
+                 score_type: str = "prop", pi: float | None = None):
         self.backbone = backbone
         self.scorer_ = scorer
         self.n_bits = n_bits
@@ -151,6 +157,8 @@ class TaskModel:
         self.mode = mode
         self._pu_lo = pu_lo
         self._pu_span = pu_span
+        self.score_type = score_type
+        self._pi = pi
 
     def _codes(self, df: pl.DataFrame) -> np.ndarray:
         codes = self.backbone.transform(df)
@@ -159,7 +167,7 @@ class TaskModel:
     def score_samples(self, df: pl.DataFrame) -> np.ndarray:
         s = self.scorer_.score(self._codes(df))
         self.diagnostics_ = self.scorer_.diagnostics_
-        if self.mode == "pu":
+        if self.mode == "pu" and self.score_type != "lift":
             s = normalize_pu(s, self._pu_lo, self._pu_span)
         return s
 
@@ -167,4 +175,7 @@ class TaskModel:
         if self.mode != "two_class":
             raise ValueError("predict_proba ใช้ได้เฉพาะ two_class — PU ใช้ score_samples")
         p = self.score_samples(df)
+        if self.score_type == "lift":
+            # SCAR: P(y=1|x) ~= pi * lift(x) — probability หยาบ (ranking คงเดิม)
+            p = np.clip(self._pi * p, 0.0, 1.0)
         return np.column_stack([1.0 - p, p])
