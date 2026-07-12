@@ -39,6 +39,9 @@ class LeadXBackbone:
         k<=n_tables (subset) ได้โดยไม่ต้อง re-hash
     hash_mode : {"median", "origin"}
         ดู ProjectionBank
+    cat_bit_frac : "auto" | float
+        สัดส่วน bits สำหรับ categorical blocks (ดู ProjectionBank) — backbone ไม่มี
+        tuner จึงใช้ค่านี้ตรงๆ; ถ้าโจทย์ส่วนใหญ่ signal อยู่ numeric ตั้ง 0
     random_state : int
     """
 

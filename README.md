@@ -133,7 +133,24 @@ score(bucket) = (n_pos + m·π) / (n_total + m)
 
 π = สัดส่วน positive ทั้งชุด, m = smoothing strength — bucket ที่มี seeds มากคะแนนวิ่งเข้าหาสัดส่วนจริง, bucket ที่มี seeds น้อยถูกดึงเข้าหา prior (กันคะแนนสุดโต่งที่เป็นแหล่ง variance หลัก)
 
-**แถวที่ตก bucket ไม่มี seed** → multi-probe (มอง bucket เพื่อนบ้าน Hamming-1) → prior fallback
+อีกทางเลือกคือ **lift** (`score_type="lift"`) — density ratio เทียบ reference population:
+
+```
+lift(bucket) = (n_pos + α) / (E[n_pos | เป็นกลาง] + α)
+```
+
+lift = 3 อ่านว่า "bucket นี้ positive เข้มข้นกว่าค่าเฉลี่ย 3 เท่า" — **class prior ไม่อยู่ในสูตร**
+→ ranking ไม่สะเทือนตามความ imbalance (จุดแข็งหลักบนข้อมูล rare-positive), กล่องหลักฐานน้อย
+ถูก shrink เข้า 1, fallback = 1 (เป็นกลาง)
+
+**แถวที่ตก bucket ไม่มี seed** → multi-probe (มอง bucket เพื่อนบ้าน Hamming-1) → prior/1 fallback
+
+### 4. Type-aware bits สำหรับ categorical
+
+hyperplane bit ปกติแทบมองไม่เห็น one-hot (contribution `w_j/√k` จิ๋วเทียบมิติ numeric รวมกัน —
+วัดจริง: P(bit เปลี่ยน|เปลี่ยน category) = 3.6%) — `cat_bit_frac` จึงจัดสรร bits ส่วนหนึ่ง
+project เฉพาะ categorical blocks (+median threshold = balanced bipartition ของ categories)
+ผลบนข้อมูล cat-signal: 0.53 → 0.93; tuner เลือกสัดส่วนให้อัตโนมัติ (0 เมื่อ cat เป็น noise)
 
 ---
 
@@ -233,7 +250,9 @@ bb2 = LeadXBackbone.load("backbone_dir")
 ```python
 LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
       strategy="unsupervised", weights="mean", grid=None,
-      feature_weighting="none", chunk_size=1_000_000, random_state=0)
+      feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
+      hash_mode="median", cat_bit_frac="auto",
+      chunk_size=1_000_000, random_state=0)
 ```
 
 | method / attr | คำอธิบาย |
@@ -250,16 +269,18 @@ LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
 ### `LeadXBackbone` — hash ครั้งเดียว reuse หลายโจทย์
 
 ```python
-LeadXBackbone(n_bits=16, n_tables=15, random_state=0, chunk_size=1_000_000)
+LeadXBackbone(n_bits=16, n_tables=15, hash_mode="median", cat_bit_frac="auto",
+              random_state=0, chunk_size=1_000_000)
 ```
 
 | method / attr | คำอธิบาย |
 |---|---|
-| `.fit(df)` | encode + unsupervised projections + cache seed codes |
-| `.fit_task(y=None, mode="two_class", m=10.0, weights="mean", n_bits=None, n_tables=None, seeds=None, background=None) → TaskModel` | สร้างโมเดลต่อโจทย์จาก cached codes (ถูกมาก) |
+| `.fit(df, y_ref=None)` | encode + unsupervised projections + cache seed codes; `y_ref` = shared feature weights จากโจทย์อ้างอิง |
+| `.fit_task(y=None, mode="two_class", m=10.0, weights="mean", n_bits=None, n_tables=None, seeds=None, background=None, score_type="prop", alpha=2.0, agg="mean") → TaskModel` | สร้างโมเดลต่อโจทย์จาก cached codes (ถูกมาก) |
 | `.transform(df) → (n, n_tables) uint64` | hash rows ใหม่ผ่าน projections เดิม |
 | `.save(path)` / `LeadXBackbone.load(path)` | serialize / deserialize |
 | `.diagnostics_` | projection quality |
+| `.feature_weights_` | shared weights (None ถ้าไม่ส่ง y_ref) |
 
 ### `TaskModel` — โมเดลต่อโจทย์ (คืนจาก `fit_task`)
 
@@ -356,7 +377,8 @@ LeadX (facade โจทย์เดียว)         LeadXBackbone (reuse ห�
 
 จุดอ่อนที่ **วัดจริงแล้ว** (รายละเอียด + ตัวเลขเต็มใน [DESIGN_NOTES.md](DESIGN_NOTES.md)):
 
-1. **Noise-feature dilution (เพดาน accuracy จริง)** — random projection คลุกทุก feature เท่ากัน; noise เยอะ → AUC ทรุด (0.99→0.79 เมื่อ D=8→200) แก้ด้วย `feature_weighting="corr"` (แลก reuse) หรือใช้ boosting
+1. **Noise-feature dilution (เพดาน accuracy จริง)** — random projection คลุกทุก feature เท่ากัน; noise เยอะ → AUC ทรุด (0.99→0.79 เมื่อ D=8→200) แก้ด้วย `feature_weighting="corr"` (แลก reuse) หรือ `backbone.fit(df, y_ref=...)` (แลกบางส่วน) หรือใช้ boosting
+1b. ~~**Categorical blindness**~~ — **แก้แล้ว** ด้วย type-aware bits (`cat_bit_frac`): เดิม signal ใน categorical ให้ AUC ≈ สุ่ม (0.53) ปัจจุบัน 0.91–0.93
 2. **Coverage collapse ในมิติสูง** — B มากไป → bucket ว่าง → miss rate พุ่ง → score หล่นเป็น prior (จัดการได้ด้วย tuner ที่เลือก B ในโซนปลอดภัย)
 3. **Seed ต้องเป็นตัวแทน distribution จริง** — score = density ratio; selection bias / covariate shift ทำให้เพี้ยน (miss rate ช่วยตรวจ shift)
 4. **Calibration** — score เป็น ranking ที่ monotone-ish ไม่ใช่ P(y|x) จริง (ดีสำหรับ AUC/AP; ถ้าต้อง probability ให้ต่อ isotonic บน OOF)
@@ -372,6 +394,7 @@ uv run python examples/benchmark.py        # AUC + เวลา เทียบ 
 uv run python examples/auc_comparison.py   # AUC เทียบ 5 algorithms บน 4 dataset (5-fold CV)
 uv run python examples/large_imbalanced.py # large + imbalanced: PR-AUC + PU niche demo
 uv run python examples/backbone_reuse.py   # hash ครั้งเดียว, reuse หลายโจทย์ (~30ms/โจทย์)
+uv run python examples/imbalance_invariance.py  # lift แบนราบตาม ratio, จุดตัด vs boosting ~0.3%
 ```
 
 ---

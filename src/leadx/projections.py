@@ -40,6 +40,13 @@ class ProjectionBank:
         จำนวน hash tables และ bits ต่อ table
     strategy : {"unsupervised", "supervised"}
         supervised ใช้ label คัด bits (cross-fitted IG); fallback ถ้า seeds < min
+    hash_mode : {"median", "origin"}
+        "median" (default) — threshold = median(w·x): ทุก bit balanced โดยโครงสร้าง
+        ไม่ต้องคัด/resample; "origin" — ตัดที่ 0 + balance-select machinery ดั้งเดิม
+    cat_bit_frac : "auto" | float
+        (median mode) สัดส่วน bits ที่ project เฉพาะ categorical dims ตาม cat_mask
+        ที่ส่งเข้า fit — cat bit + median threshold = balanced bipartition ของ
+        categories; 0 = ปิด; supervised จัดสรรเองผ่าน IG
     oversample : int
         สุ่ม candidates เกิน oversample × n_bits เท่า ก่อนคัด
     balance_min : float

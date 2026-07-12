@@ -66,6 +66,12 @@ leadx ทรุด 0.20 (miss rate 0% ตลอด → ไม่ใช่ covera
 
 > ⚠️ **การค้นพบจากการ implement:** `FeatureEncoder` standardize ต่อ feature → **หักล้างการถ่วงน้ำหนักที่ทำก่อนหน้า** (`(c·x−mean)/std = (x−mean)/std`) การถ่วงต้องทำ **หลัง** standardize เท่านั้น (ฝังใน `feature_weighting="corr"`) การ preprocess ภายนอกไม่มีผล
 
+### #1b Categorical blindness — แก้แล้ว (ดู §5.3 type-aware bits)
+
+hyperplane bit ที่คลุมทุกมิติแทบมองไม่เห็น one-hot: `P(bit เปลี่ยน | เปลี่ยน
+category) = 3.6%` → signal ใน categorical ให้ AUC ≈ สุ่ม (0.526) — ข้อสังเกตจาก
+ผู้ใช้ แก้ด้วย `cat_bit_frac` (bits แยกชนิด): 0.526 → 0.929
+
 ### #2 Coverage collapse ในมิติสูง
 
 มิติสูง → คู่จุดสุ่มทำมุมเข้าใกล้ 90° หมด → collision `(1/2)^B` เล็กมาก → query ตก bucket ว่าง → prior:

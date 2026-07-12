@@ -48,6 +48,20 @@ class LeadX:
         "corr" ถ่วง feature ตาม |corr กับ y| ก่อน hash (แก้ noise dilution — feature
         ที่ไม่เกี่ยวได้น้ำหนักต่ำ ไม่ปน hash). two_class เท่านั้น. ใช้ y → codes กลาย
         เป็น task-specific จึงปิดการ reuse projections ข้ามโจทย์ (default "none")
+    score_type : {"prop", "lift"}
+        "prop" — สัดส่วน smoothed (m-estimate); "lift" — density ratio เทียบ reference
+        (imbalance-invariant: prior ไม่อยู่ในสูตร; สเกลตีความได้; fallback = 1)
+    alpha : float
+        shrink-toward-1 strength ของ lift — กล่องหลักฐานน้อยถูกดึงเข้า 1
+    agg : {"mean", "log"}
+        รวม lift ข้าม tables: arithmetic / geometric (NB-style)
+    hash_mode : {"median", "origin"}
+        จุดตัด hyperplane: median ของ w·x (balanced โดยโครงสร้าง, fit เร็ว, robust —
+        default) / ตัดที่ 0 (ดั้งเดิม + balance-select machinery)
+    cat_bit_frac : "auto" | float
+        สัดส่วน bits ที่ project เฉพาะ categorical blocks (แก้ hyperplane bits มองไม่
+        เห็น one-hot); "auto" = ตามสัดส่วนมิติ; อยู่ใน tuner grid — tuner เลือก 0
+        เองเมื่อ categorical เป็น noise
     chunk_size : int
         ขนาด chunk ตอน predict — คุม peak memory บนข้อมูลใหญ่
     random_state : int
