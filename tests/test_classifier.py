@@ -219,3 +219,68 @@ def test_load_old_artifact_without_new_meta(tmp_path):
     assert loaded.hash_mode == "median"       # fallback
     assert loaded.cat_bit_frac == "auto"      # fallback
     np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)
+
+
+def _strip_meta(path, remove_thresholds):
+    import json, os
+    meta = json.loads((path / "meta.json").read_text())
+    meta.pop("hash_mode", None)
+    (path / "meta.json").write_text(json.dumps(meta))
+    if remove_thresholds:
+        os.remove(path / "thresholds.npy")
+
+
+def test_legacy_inference_era1_origin(tmp_path):
+    # era-1: ไม่มีทั้ง hash_mode และ thresholds.npy → ต้อง infer เป็น origin
+    df, y = _blobs_df(n_per=60)
+    clf = LeadX(mode="two_class", tune=False, n_bits=6, n_tables=3,
+                hash_mode="origin", random_state=0).fit(df, y)
+    expected = clf.predict_proba(df)
+    clf.save(tmp_path / "m")
+    _strip_meta(tmp_path / "m", remove_thresholds=True)
+    loaded = LeadX.load(tmp_path / "m")
+    assert loaded.hash_mode == "origin"
+    np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)
+
+
+def test_legacy_inference_era2_origin_zero_thresholds(tmp_path):
+    # era-2 origin: มี thresholds.npy แต่เป็นศูนย์ล้วน → ต้อง infer เป็น origin
+    df, y = _blobs_df(n_per=60)
+    clf = LeadX(mode="two_class", tune=False, n_bits=6, n_tables=3,
+                hash_mode="origin", random_state=0).fit(df, y)
+    expected = clf.predict_proba(df)
+    clf.save(tmp_path / "m")
+    _strip_meta(tmp_path / "m", remove_thresholds=False)
+    loaded = LeadX.load(tmp_path / "m")
+    assert loaded.hash_mode == "origin"
+    np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)
+
+
+def test_legacy_inference_era2_median_nonzero_thresholds(tmp_path):
+    # era-2 median: มี thresholds ไม่เป็นศูนย์ → infer เป็น median
+    df, y = _blobs_df(n_per=60)
+    clf = LeadX(mode="two_class", tune=False, n_bits=6, n_tables=3,
+                hash_mode="median", random_state=0).fit(df, y)
+    expected = clf.predict_proba(df)
+    clf.save(tmp_path / "m")
+    _strip_meta(tmp_path / "m", remove_thresholds=False)
+    loaded = LeadX.load(tmp_path / "m")
+    assert loaded.hash_mode == "median"
+    np.testing.assert_allclose(loaded.predict_proba(df), expected, rtol=1e-6)
+
+
+def test_tuned_diagnostics_match_deployed_model():
+    # #2: diagnostics ต้องสะท้อน prefix ที่ deploy จริง ไม่ใช่ bank เต็ม B_max/K_max
+    df, y = _blobs_df(n_per=50)  # seeds น้อย → n_bits ใหญ่ (24) ควรแพ้ → best < max
+    grid = {"n_bits": [4, 24], "n_tables": [2, 6], "m": [10.0], "weights": ["mean"],
+            "strategy": ["unsupervised"], "score_type": ["prop"], "alpha": [2.0],
+            "agg": ["mean"], "cat_bit_frac": [0.0]}
+    clf = LeadX(mode="two_class", tune=True, grid=grid, random_state=0).fit(df, y)
+    diag = clf.diagnostics_["projections"]
+    # invariant หลัก: โครงสร้าง diagnostics == โครงสร้างของ hasher ที่ deploy
+    assert len(diag["tables"]) == clf.hasher_.n_tables == clf.config_["n_tables"]
+    for t in diag["tables"]:
+        assert len(t["balance"]) == clf.hasher_.n_bits == clf.config_["n_bits"]
+        assert t["n_eff"] <= 2 ** clf.config_["n_bits"] + 1  # n_eff จาก codes ของ prefix จริง
+    # ต้อง exercise slicing path จริง (ถ้า best == max ทั้งคู่ test นี้ไม่ได้ทดสอบอะไร)
+    assert (clf.config_["n_bits"] < 24) or (clf.config_["n_tables"] < 6)

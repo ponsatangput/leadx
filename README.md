@@ -224,6 +224,7 @@ per-task ปรับ granularity ได้ถูกๆ: `fit_task(y, n_bits=b, 
 
 ```python
 clf.diagnostics_["projections"]   # balance, redundancy, n_eff, diversity ต่อ table
+                                  # (หลัง tune: คำนวณจาก prefix ที่ deploy จริง ไม่ใช่ bank เต็ม)
 clf.diagnostics_["scoring"]       # miss_rate_join, miss_rate_final (หลัง predict)
 ```
 
@@ -242,6 +243,11 @@ bb2 = LeadXBackbone.load("backbone_dir")
 ```
 
 > Caveat: hashed categorical ใช้ polars hash — โหลดข้าม polars major version อาจได้ hash ต่างกัน (version บันทึกใน `meta.json`)
+>
+> **Legacy artifacts:** โมเดลที่ save ก่อนมี `hash_mode` ใน metadata จะถูก infer ตอน load:
+> ไม่มี `thresholds.npy` หรือ thresholds เป็นศูนย์ล้วน → `origin`; ไม่เป็นศูนย์ → `median`
+> — predictions ไม่เปลี่ยน (P/thresholds ถูกใช้ตรงๆ) แต่ attribute สะท้อน algorithm จริง
+> กัน refit เปลี่ยน mode เงียบๆ
 
 ---
 

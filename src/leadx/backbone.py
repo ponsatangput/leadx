@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 
 from .encoder import FeatureEncoder
-from .hashing import HashEnsemble, mask_codes
+from .hashing import HashEnsemble, infer_hash_mode, mask_codes
 from .projections import ProjectionBank
 from .scoring import SeedScorer, normalize_pu, pu_score_range
 
@@ -177,13 +177,13 @@ class LeadXBackbone:
     def load(cls, path) -> "LeadXBackbone":
         path = Path(path)
         meta = json.loads((path / "meta.json").read_text())
+        thr_file = path / "thresholds.npy"
+        thresholds = np.load(thr_file) if thr_file.exists() else None
         bb = cls(n_bits=meta["n_bits"], n_tables=meta["n_tables"],
-                 hash_mode=meta.get("hash_mode", "median"),
+                 hash_mode=infer_hash_mode(meta.get("hash_mode"), thresholds),
                  cat_bit_frac=meta.get("cat_bit_frac", "auto"),
                  random_state=meta["random_state"], chunk_size=meta["chunk_size"])
         bb.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
-        thr_file = path / "thresholds.npy"
-        thresholds = np.load(thr_file) if thr_file.exists() else None  # backbone เก่า → 0
         bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         bb._seed_codes = np.load(path / "seed_codes.npy")
         fw_file = path / "feature_weights.npy"

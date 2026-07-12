@@ -179,8 +179,13 @@ signal อยู่คนละ features weights จะกดมันทิ้�
   (เดิม refit bank ใหม่ — GridSearchCV-style ไม่ผิดแต่มี variance ระหว่าง
   evaluated↔deployed; ตอนนี้เป็นศูนย์ + ประหยัด refit)
 - serialization เก็บ `hash_mode`/`cat_bit_frac` ครบทั้ง LeadX/backbone
-  (artifact เก่า fallback median/auto — predictions ไม่เปลี่ยนเพราะ P/thresholds
-  ถูก persist ตรงๆ อยู่แล้ว)
+- **legacy hash_mode inference** (`infer_hash_mode` ใน hashing.py): artifact เก่า
+  ที่ไม่มี key — ไม่มี thresholds.npy (era-1) หรือ thresholds ศูนย์ล้วน (era-2 origin)
+  → "origin"; ไม่เป็นศูนย์ → "median" — file existence อย่างเดียวไม่พอเพราะ era-2
+  origin ก็ save thresholds (เป็นศูนย์); predictions ไม่เปลี่ยนทุกกรณี
+- **diagnostics หลัง tune สะท้อน deployed prefix** (`projection_diagnostics` ใน
+  projections.py): เดิมรายงานจาก bank เต็ม B_max/K_max — ตอนนี้คำนวณใหม่จาก
+  P/thresholds ที่ slice แล้วบน sample (~20k) โครงสร้างการันตีตรงกับ hasher เสมอ
 
 ### Type-aware bits — แก้ categorical blindness (`cat_bit_frac`)
 

@@ -10,8 +10,8 @@ import numpy as np
 import polars as pl
 
 from .encoder import FeatureEncoder
-from .hashing import HashEnsemble
-from .projections import ProjectionBank
+from .hashing import HashEnsemble, infer_hash_mode
+from .projections import ProjectionBank, projection_diagnostics
 from .scoring import SeedScorer, normalize_pu, pu_score_range
 from .tuning import Tuner
 
@@ -173,6 +173,8 @@ class LeadX:
             P = np.ascontiguousarray(bank.P_[: cfg["n_tables"], :, : cfg["n_bits"]])
             thr = np.ascontiguousarray(bank.thresholds_[: cfg["n_tables"], : cfg["n_bits"]])
             self.hasher_ = HashEnsemble(P, thr)
+            # diagnostics ต้องสะท้อน prefix ที่ deploy จริง ไม่ใช่ bank เต็มของ tuner
+            proj_diag = projection_diagnostics(P, thr, Z, strategy=cfg["strategy"])
         else:
             bank = ProjectionBank(
                 n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
@@ -182,6 +184,7 @@ class LeadX:
             bank.fit(Z, y if self.mode == "two_class" else None,
                      cat_mask=self.encoder_.cat_mask_)
             self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
+            proj_diag = bank.diagnostics()
         codes = self.hasher_.transform(Z)
         bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
         self.scorer_ = SeedScorer(
@@ -195,7 +198,7 @@ class LeadX:
             self._pu_lo, self._pu_span = pu_score_range(self.scorer_, codes, bg_codes)
         else:
             self._pu_lo, self._pu_span = None, None
-        self.diagnostics_ = {"projections": bank.diagnostics(), "config": cfg}
+        self.diagnostics_ = {"projections": proj_diag, "config": cfg}
         return self
 
     def _compute_weights(self, Z: np.ndarray, y: np.ndarray):
@@ -307,12 +310,14 @@ class LeadX:
         cfg.setdefault("alpha", 2.0)
         cfg.setdefault("agg", "mean")
         cfg.setdefault("cat_bit_frac", "auto")
+        thr_file = path / "thresholds.npy"
+        thresholds = np.load(thr_file) if thr_file.exists() else None
         clf = cls(
             mode=meta["mode"], tune=False, n_bits=cfg["n_bits"],
             n_tables=cfg["n_tables"], m=cfg["m"], strategy=cfg["strategy"],
             weights=cfg["weights"], feature_weighting=meta.get("feature_weighting", "none"),
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
-            hash_mode=meta.get("hash_mode", "median"),
+            hash_mode=infer_hash_mode(meta.get("hash_mode"), thresholds),
             cat_bit_frac=cfg["cat_bit_frac"],
             chunk_size=meta["chunk_size"],
         )
@@ -326,8 +331,6 @@ class LeadX:
         fw = meta.get("feature_weights")
         clf.feature_weights_ = None if fw is None else np.asarray(fw, dtype=np.float32)
         clf.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
-        thr_file = path / "thresholds.npy"
-        thresholds = np.load(thr_file) if thr_file.exists() else None  # model เก่า → 0
         clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         scorer = SeedScorer(
             mode=meta["mode"], m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],

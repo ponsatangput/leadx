@@ -47,6 +47,23 @@ class HashEnsemble:
         return codes
 
 
+def infer_hash_mode(meta_value, thresholds) -> str:
+    """infer hash_mode ของ legacy artifact ที่ไม่มี key ใน metadata
+
+    กติกา (ตามยุคของ artifact):
+    1. มีค่าใน metadata → ใช้ตามนั้น (era-3)
+    2. ไม่มี thresholds เลย → "origin" (era-1: ก่อนมี median hashing, ตัดที่ 0)
+    3. thresholds เป็นศูนย์ล้วน → "origin" (era-2 origin: save thresholds แต่เป็น 0
+       — file existence อย่างเดียวตัดสินไม่ได้ ต้องดูค่า)
+    4. thresholds มีค่าไม่เป็นศูนย์ → "median"
+    """
+    if meta_value is not None:
+        return meta_value
+    if thresholds is None or not np.any(thresholds):
+        return "origin"
+    return "median"
+
+
 def mask_codes(codes: np.ndarray, n_bits_keep: int, n_bits_total: int) -> np.ndarray:
     """เก็บ b bits แรก (คุณภาพดีสุด) — partition หยาบลงโดยไม่ต้อง re-hash"""
     return codes >> np.uint64(n_bits_total - n_bits_keep)

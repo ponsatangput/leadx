@@ -326,6 +326,45 @@ class ProjectionBank:
         }
 
 
+def projection_diagnostics(P: np.ndarray, thresholds: np.ndarray, Z: np.ndarray,
+                           strategy: str = "unsupervised",
+                           sample_size: int = 20_000, seed: int = 0) -> dict:
+    """คำนวณ diagnostics จาก projections ที่ deploy จริง (เช่น prefix slice หลัง tune)
+
+    รูปแบบผลลัพธ์เดียวกับ ProjectionBank.diagnostics() — balance/max_redundancy/n_eff
+    ต่อ table + diversity_nmi ข้าม tables — แต่คำนวณจาก P/thresholds ที่ให้มาโดยตรง
+    การันตีว่าตัวเลขสะท้อนโมเดลที่ deploy ไม่ใช่ bank เต็ม B_max/K_max ที่ tuner ใช้"""
+    P = np.asarray(P, dtype=np.float32)
+    thresholds = np.asarray(thresholds, dtype=np.float32)
+    Z = np.asarray(Z, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(Z.shape[0])[: min(Z.shape[0], sample_size)]
+    S = Z[idx]
+    K, _, B = P.shape
+    tables, parts = [], []
+    b8 = min(8, B)
+    for k in range(K):
+        bits = (S @ P[k]) > thresholds[k]
+        minority = np.minimum(bits.mean(axis=0), 1.0 - bits.mean(axis=0))
+        Bc = bits.astype(np.float32)
+        Bc = (Bc - Bc.mean(axis=0)) / (Bc.std(axis=0) + np.float32(1e-7))
+        corr = np.abs(Bc.T @ Bc) / len(S)
+        np.fill_diagonal(corr, 0.0)
+        tables.append({
+            "balance": [float(x) for x in minority],
+            "max_redundancy": float(corr.max()) if B > 1 else 0.0,
+            "n_eff": ProjectionBank._n_eff(_pack_bits(bits)),
+        })
+        parts.append(_pack_bits(bits[:, :b8]))
+    if K >= 2:
+        nmis = [normalized_mutual_info_score(parts[i], parts[j])
+                for i in range(K) for j in range(i + 1, K)]
+        diversity = float(np.mean(nmis))
+    else:
+        diversity = 0.0
+    return {"strategy": strategy, "tables": tables, "diversity_nmi": diversity}
+
+
 def _pack_bits(bits: np.ndarray) -> np.ndarray:
     powers = np.uint64(1) << np.arange(bits.shape[1] - 1, -1, -1, dtype=np.uint64)
     return bits.astype(np.uint64) @ powers

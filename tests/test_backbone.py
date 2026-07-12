@@ -169,3 +169,19 @@ def test_backbone_save_load_preserves_config(tmp_path):
     assert loaded.hash_mode == "origin"
     assert loaded.cat_bit_frac == 0.0
     np.testing.assert_allclose(loaded.fit_task(y).predict_proba(df), expected, rtol=1e-6)
+
+
+def test_backbone_legacy_inference_era1_origin(tmp_path):
+    # era-1 backbone: ไม่มีทั้ง hash_mode และ thresholds.npy → infer origin
+    import json, os
+    df, y = _blobs_df(n_per=80)
+    bb = LeadXBackbone(n_bits=6, n_tables=3, hash_mode="origin", random_state=0).fit(df)
+    expected = bb.fit_task(y).predict_proba(df)
+    bb.save(tmp_path / "bb")
+    meta = json.loads((tmp_path / "bb" / "meta.json").read_text())
+    meta.pop("hash_mode", None)
+    (tmp_path / "bb" / "meta.json").write_text(json.dumps(meta))
+    os.remove(tmp_path / "bb" / "thresholds.npy")
+    loaded = LeadXBackbone.load(tmp_path / "bb")
+    assert loaded.hash_mode == "origin"
+    np.testing.assert_allclose(loaded.fit_task(y).predict_proba(df), expected, rtol=1e-6)
