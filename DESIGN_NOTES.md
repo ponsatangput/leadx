@@ -209,6 +209,27 @@ numeric bits เพื่อให้ prefix masking เหลือทั้ง
 เชิงทฤษฎี: การยอมรับว่า hyperplane เป็น hash family ของ continuous space — categorical
 ต้องใช้ family ของมันเอง (bipartition) แล้วต่อรหัสเข้า bucket เดียวกัน
 
+## 5.5 Real-data validation (telco / adult / home-credit)
+
+ผลรอบแรกกับข้อมูลจริง (examples/real_data_benchmark.py):
+
+**Two-class:** HistGB นำทุกชุดตามคาด — telco แค่ −0.006 (categorical หนัก, cat_bit_frac
+ทำงาน), adult −0.029, home-credit −0.030 (weak signal 122 features = ระบอบ noise
+dilution); feature_weighting ช่วยสม่ำเสมอ (+0.006…+0.019)
+
+**PU (niche หลัก) — ยืนยัน:** home-credit เห็น positive 30% ไม่มี negative → AUC 0.643,
+recall@top10% 21.3% (สุ่ม 10%) ที่ boosting รันไม่ได้เลย
+
+**Invariance — ยืนยัน / crossover — ต้อง qualify:** ตรึง 789 positives แปร ratio
+7.3→0.35% → leadx แบนราบ (0.604/0.602/0.608) ตามทฤษฎี แต่ HistGB บน weak signal
+ทรุดช้ากว่า synthetic มาก (−0.012 vs −0.063) และยังนำทุก ratio → **crossover ที่เห็น
+บน synthetic เกิดเมื่อ signal ชัด** — invariance เป็นคุณสมบัติของ leadx จริง แต่ไม่
+การันตีชนะเมื่อระดับสัมบูรณ์ต่ำกว่า
+
+**บทเรียน methodology:** rarity sweep รอบแรกของเราสับสนตัวแปร (ลดทั้ง ratio และ
+จำนวน positive สัมบูรณ์พร้อมกัน) — invariance ต้องทดสอบแบบตรึง N_pos แล้วแปร negative
+เท่านั้น
+
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
 **Adaptive-depth scoring** (แถวเลือกความลึก prefix เองตามหลักฐาน ≥ tau):

@@ -42,7 +42,7 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 | ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — model คือ dict lookup |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
 | **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
-| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **ใช่** — `score_type="lift"` แบนราบตาม ratio ขณะที่ boosting ทรุด (ตัดกันที่ ~0.3%) |
+| **imbalanced สุดโต่ง** (positive < ~0.3%) | ⚠️ **ขึ้นกับ signal** — invariance ของ lift ยืนยันแล้วบนข้อมูลจริง (leadx แบนราบทุก ratio) แต่ crossover ชนะ boosting เกิดเมื่อ signal ชัด (synthetic); บน weak-signal จริง (home-credit) HistGB ยังนำทุก ratio |
 | **imbalanced ปานกลาง** (1–10%) ที่มี labeled negatives | ❌ **ไม่** — boosting ยังชนะ (PR-AUC สูงกว่า) |
 
 รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
@@ -354,6 +354,21 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 **จุดตัด ~0.3%**: ต่ำกว่านั้น leadx ชนะแม้ใน two-class ที่มี label ครบ นี่คือ niche
 ที่สองของ leadx (คู่กับ PU): **rare-positive สุดโต่ง**
 
+### Real-data validation (telco / adult / home-credit)
+
+| dataset | leadx (tuned) | +feature_weighting | HistGB | gap |
+|---|---|---|---|---|
+| telco 7k (cat หนัก) | 0.833 | 0.839 | 0.845 | **−0.006** |
+| adult 32k | 0.883 | 0.892 | 0.921 | −0.029 |
+| home-credit 307k (weak signal, 122 feat) | 0.703 | 0.722 | 0.752 | −0.030 |
+
+- **PU บนข้อมูลจริง (home-credit):** เห็น positive 30% (5,923 seeds) ไม่มี negative →
+  AUC 0.643, PR-AUC 0.143 (baseline 0.083), recall@top10% 21.3% — **HistGB รันไม่ได้เลย**
+- **Invariance บนข้อมูลจริง:** ตรึง 789 positives, ratio 7.3%→0.35% → leadx แบนราบ
+  (0.604→0.608) ตามทฤษฎี; แต่ HistGB บน weak signal ทรุดน้อย (0.712→0.700) และยังนำ —
+  **crossover ขึ้นกับความชัดของ signal** ไม่ใช่กฎตายตัว
+- feature_weighting ช่วยสม่ำเสมอทุกชุด (+0.006 ถึง +0.019)
+
 ### Noise features & `feature_weighting`
 
 signal 8 features คงที่ เติม noise จน D โต:
@@ -416,6 +431,7 @@ uv run python examples/auc_comparison.py   # AUC เทียบ 5 algorithms �
 uv run python examples/large_imbalanced.py # large + imbalanced: PR-AUC + PU niche demo
 uv run python examples/backbone_reuse.py   # hash ครั้งเดียว, reuse หลายโจทย์ (~30ms/โจทย์)
 uv run python examples/imbalance_invariance.py  # lift แบนราบตาม ratio, จุดตัด vs boosting ~0.3%
+uv run python examples/real_data_benchmark.py   # ข้อมูลจริง: telco/adult/home-credit + PU + invariance
 ```
 
 ---
