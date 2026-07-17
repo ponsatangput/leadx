@@ -79,7 +79,8 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 ### PU learning (มีแต่ positive ที่ยืนยันแล้ว)
 
 ```python
-clf = LeadX(mode="pu", n_bits=10, n_tables=80)   # PU ชอบ bits ต่ำ + tables เยอะ
+clf = LeadX(mode="pu", n_bits=10, n_tables=80,   # PU ชอบ bits ต่ำ + tables เยอะ
+            feature_weighting="contrast")        # +26-30% เมื่อมี background
 clf.fit(X_positive)                     # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
 scores = clf.score_samples(X_large)     # ranking score 0..1 (ไม่ใช่ probability)
 
@@ -162,11 +163,12 @@ project เฉพาะ categorical blocks (+tie-aware threshold = bipartition �
 | `mode` | `"two_class"` / `"pu"` | label สองฝั่ง / positive-unlabeled |
 | `strategy` | `"unsupervised"` (default) / `"supervised"` | คัด projection vectors แบบไม่ใช้ / ใช้ label (auto-tune ลองทั้งคู่) |
 | `weights` | `"mean"` (default) / `"coverage"` | รวม score ข้าม tables แบบเฉลี่ยตรง / ถ่วงให้ table ที่ miss เยอะพูดเบาลง |
-| `feature_weighting` | `"none"` (default) / `"corr"` | ถ่วง feature ตาม \|corr กับ y\| ก่อน hash (แก้ noise dilution; two_class เท่านั้น; ปิด reuse) |
+| `feature_weighting` | `"none"` (default) / `"corr"` / `"contrast"` | ถ่วง feature ก่อน hash: `"corr"` = \|corr กับ y\| (two_class); `"contrast"` = \|mean(seeds)−mean(bg)\| (pu + background — **+26-30% rel PR-AUC บน home-credit PU**) — ทั้งคู่ task-aware ปิด reuse |
 | `score_type` | `"prop"` (default) / `"lift"` | สัดส่วน smoothed / density ratio (lift) — lift เป็น **imbalance-invariant**: prior ไม่อยู่ในสูตร, fallback = 1 (เป็นกลาง), สเกลตีความได้ ("เข้มข้นกว่าค่าเฉลี่ย 3 เท่า") |
 | `alpha` | float (default 2) | shrink-toward-1 strength ของ lift — กล่องหลักฐานน้อยถูกดึงเข้า 1 (กัน outlier กล่องจิ๋ว) |
 | `agg` | `"mean"` (default) / `"log"` | รวม lift ข้าม tables แบบ arithmetic / geometric (NB-style) |
 | `m` | float (default 10) | smoothing strength (สำหรับ `"prop"`) |
+| `whiten` | `False` (default) / `True` | PCA-whitening พับเข้า projections — decorrelate features ก่อนสุ่มทิศ (**data-dependent**: +16-21% บน home-credit แต่ทำร้ายข้อมูลที่ residual เป็น noise ล้วน — อยู่ใน tuner grid ให้ตัดสินเอง); unsupervised → ใช้กับ backbone ได้ |
 | `cat_bit_frac` | `"auto"` / float 0–1 | สัดส่วน bits ที่ project เฉพาะ categorical blocks — แก้ปัญหา hyperplane bits มองไม่เห็น one-hot (cat-signal: 0.53→0.93); tuner เลือก 0.0 อัตโนมัติเมื่อ cat เป็น noise |
 | `hash_mode` | `"median"` (default) / `"origin"` | จุดตัดของ hyperplane: tie-aware threshold ~median ของ `w·x` (split ใกล้ 50/50 สุดเท่าที่ค่าอนุญาต, fit เร็วกว่า ~15x, robust ต่อ input ไม่ centered; **AUC เสมอ origin** — paired 25 คู่ diff +0.001±0.015) / ตัดที่ 0 (ดั้งเดิม + balance-select) |
 | `chunk_size` | int (default 1M) | ขนาด chunk ตอน predict — คุม peak memory |

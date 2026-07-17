@@ -160,3 +160,39 @@ def test_balanced_threshold_matches_median_on_continuous():
     np.testing.assert_allclose(t, med, atol=2e-3)
     frac = (proj > t).mean(axis=0)
     assert np.abs(frac - 0.5).max() < 0.01
+
+
+def test_whiten_decorrelated_projections_improve_on_correlated_noise():
+    # nuisance factor ครอบงำ variance ของทุกคอลัมน์ + signal ซ่อนใน residual
+    # directions — projections ปกติเห็นแต่ nuisance; whiten กด nuisance ให้เท่า
+    # residual → เห็น signal (โครงสร้างเดียวกับที่วัดจริงบน home-credit +21%)
+    from leadx.hashing import HashEnsemble
+    from leadx.scoring import SeedScorer
+    from sklearn.metrics import roc_auc_score
+    rng = np.random.default_rng(0)
+    n = 12000
+    L = rng.standard_normal((n, 1))                       # nuisance (ไม่เกี่ยวกับ y)
+    g = rng.standard_normal((n, 8))                       # signal residuals
+    X = np.hstack([L @ np.ones((1, 8)) + 0.4 * g,
+                   L @ np.ones((1, 36)) + 0.4 * rng.standard_normal((n, 36))]).astype(np.float32)
+    X = (X - X[:8000].mean(0)) / (X[:8000].std(0) + 1e-9)
+    y = (g.sum(1) + rng.standard_normal(n) * 0.5 > 0).astype(float)
+    tr, te = slice(0, 8000), slice(8000, n)
+    aucs = {}
+    for whiten in [False, True]:
+        bank = ProjectionBank(n_tables=10, n_bits=8, whiten=whiten,
+                              random_state=0).fit(X[tr])
+        h = HashEnsemble(bank.P_, bank.thresholds_)
+        sc = SeedScorer(mode="two_class", score_type="lift", agg="log", alpha=2.0,
+                        n_bits=8).fit(h.transform(X[tr]), y[tr])
+        aucs[whiten] = roc_auc_score(y[te], sc.score(h.transform(X[te])))
+    assert aucs[True] > aucs[False] + 0.03
+
+
+def test_whiten_folds_into_P_no_pipeline_change():
+    # whiten พับเข้า P_ — shape/thresholds เหมือนเดิม ใช้กับ HashEnsemble ได้ตรงๆ
+    rng = np.random.default_rng(1)
+    Z = rng.standard_normal((3000, 20)).astype(np.float32)
+    bank = ProjectionBank(n_tables=3, n_bits=6, whiten=True, random_state=0).fit(Z)
+    assert bank.P_.shape == (3, 20, 6)
+    assert bank.thresholds_.shape == (3, 6)

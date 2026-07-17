@@ -86,11 +86,11 @@ class LeadX:
     def __init__(self, mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
                  strategy="unsupervised", weights="mean", grid=None,
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
-                 hash_mode="median", cat_bit_frac="auto",
+                 hash_mode="median", cat_bit_frac="auto", whiten=False,
                  chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
-        if feature_weighting not in ("none", "corr"):
+        if feature_weighting not in ("none", "corr", "contrast"):
             raise ValueError(f"feature_weighting ไม่รู้จัก: {feature_weighting}")
         self.mode = mode
         self.tune = tune
@@ -106,6 +106,7 @@ class LeadX:
         self.agg = agg
         self.hash_mode = hash_mode
         self.cat_bit_frac = cat_bit_frac
+        self.whiten = whiten
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -143,28 +144,29 @@ class LeadX:
         # feature weighting (หลัง standardize มิฉะนั้นถูก z-score หักล้าง) — แก้ noise
         # dilution: ถ่วง feature ตาม |corr กับ y| ก่อน hash. ใช้ y → codes task-specific
         # (ปิด reuse ข้ามโจทย์) จึง opt-in default "none"
-        self.feature_weights_ = self._compute_weights(Z, y)
+        Z_bg = self.encoder_.transform(background) if background is not None else None
+        self.feature_weights_ = self._compute_weights(Z, y, Z_bg)
         if self.feature_weights_ is not None:
             Z = Z * self.feature_weights_
-        Z_bg = self.encoder_.transform(background) if background is not None else None
-        if Z_bg is not None and self.feature_weights_ is not None:
-            Z_bg = Z_bg * self.feature_weights_
+            if Z_bg is not None:
+                Z_bg = Z_bg * self.feature_weights_
         if self.tune:
             tuner = Tuner(grid=self.grid, mode=self.mode,
                           cat_bit_frac=self.cat_bit_frac, hash_mode=self.hash_mode,
-                          random_state=self.random_state)
+                          whiten=self.whiten, random_state=self.random_state)
             best = tuner.tune(Z, y, Z_background=Z_bg, cat_mask=self.encoder_.cat_mask_)
             self.tuning_results_ = tuner.results_
             cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights",
                                         "score_type", "alpha", "agg")}
             fr = best.get("cat_bit_frac", str(self.cat_bit_frac))
             cfg["cat_bit_frac"] = "auto" if fr == "auto" else float(fr)
+            cfg["whiten"] = bool(best.get("whiten", self.whiten))
         else:
             self.tuning_results_ = None
             cfg = {"strategy": self.strategy, "n_bits": self.n_bits,
                    "n_tables": self.n_tables, "m": self.m, "weights": self.weights,
                    "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg,
-                   "cat_bit_frac": self.cat_bit_frac}
+                   "cat_bit_frac": self.cat_bit_frac, "whiten": self.whiten}
         self.config_ = cfg
         if self.tune:
             # ใช้ prefix ของ bank ที่ Tuner ประเมินจริง — สิ่งที่ deploy = สิ่งที่วัด
@@ -179,7 +181,7 @@ class LeadX:
             bank = ProjectionBank(
                 n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
                 hash_mode=self.hash_mode, cat_bit_frac=cfg["cat_bit_frac"],
-                random_state=self.random_state,
+                whiten=cfg["whiten"], random_state=self.random_state,
             )
             bank.fit(Z, y if self.mode == "two_class" else None,
                      cat_mask=self.encoder_.cat_mask_)
@@ -201,17 +203,29 @@ class LeadX:
         self.diagnostics_ = {"projections": proj_diag, "config": cfg}
         return self
 
-    def _compute_weights(self, Z: np.ndarray, y: np.ndarray):
-        """น้ำหนัก feature = |point-biserial corr กับ y| (Z standardize แล้ว)
-
-        คืน None ถ้า feature_weighting="none" หรือ mode="pu" (ไม่มี y ให้วัด corr)
+    def _compute_weights(self, Z: np.ndarray, y: np.ndarray, Z_bg=None):
+        """น้ำหนัก feature (Z standardize แล้ว):
+        "corr"     — |point-biserial corr กับ y| (two_class เท่านั้น)
+        "contrast" — |mean(seeds) − mean(background)| (pu เท่านั้น — วัดจริง
+                     home-credit PU: +26-30% rel PR-AUC; task-aware ปิด reuse)
         """
-        if self.feature_weighting == "none" or self.mode != "two_class":
+        if self.feature_weighting == "none":
             return None
-        yc = y - y.mean()
-        denom = np.sqrt((Z ** 2).sum(axis=0)) * np.sqrt((yc ** 2).sum()) + 1e-12
-        w = np.abs((Z * yc[:, None]).sum(axis=0) / denom)
-        return w.astype(np.float32)
+        if self.feature_weighting == "corr":
+            if self.mode != "two_class":
+                return None
+            yc = y - y.mean()
+            denom = np.sqrt((Z ** 2).sum(axis=0)) * np.sqrt((yc ** 2).sum()) + 1e-12
+            w = np.abs((Z * yc[:, None]).sum(axis=0) / denom)
+            return w.astype(np.float32)
+        # contrast
+        if self.mode != "pu" or Z_bg is None:
+            raise ValueError(
+                "feature_weighting='contrast' ใช้กับ mode='pu' + ต้องส่ง background "
+                "(weights = |mean(seeds) − mean(background)|)"
+            )
+        w = np.abs(Z.mean(axis=0) - Z_bg.mean(axis=0)) + 1e-3
+        return (w / w.max()).astype(np.float32)
 
     def score_samples(self, df: pl.DataFrame) -> np.ndarray:
         """คืน score ต่อแถว (ใช้ได้ทั้งสอง mode)
@@ -292,6 +306,7 @@ class LeadX:
             "encoder": self.encoder_.to_dict(),
             "feature_weighting": self.feature_weighting,
             "hash_mode": self.hash_mode,
+            "whiten": self.config_.get("whiten", self.whiten),
             "pu_lo": self._pu_lo,
             "pu_span": self._pu_span,
             "pi": self._pi,
@@ -318,6 +333,7 @@ class LeadX:
             weights=cfg["weights"], feature_weighting=meta.get("feature_weighting", "none"),
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
             hash_mode=infer_hash_mode(meta.get("hash_mode"), thresholds),
+            whiten=meta.get("whiten", False),
             cat_bit_frac=cfg["cat_bit_frac"],
             chunk_size=meta["chunk_size"],
         )

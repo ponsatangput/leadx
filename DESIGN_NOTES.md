@@ -241,6 +241,15 @@ Exact-kNN oracle gate บน home-credit PU (รายละเอียด outp
 คำแนะนำ PU: b8–10, K=40–80 ("more tables > more bits" ยืนยันแล้ว)
 ปฏิเสธเพิ่ม: mode-aware scoring (แย่ลงทุกกรณี), PU-refinement (ถูก tables scaling ครอบ)
 
+**Phase 2B (learned geometry) — ผ่าน gate 2 ตัว, shipped:**
+- `feature_weighting="contrast"` (pu): +26-30% rel PR-AUC, 10/10 draws — task-aware
+- `whiten=True`: +16-21% rel, 10/10 — **unsupervised/reusable** แต่ **data-dependent**
+  (ขยาย noise บนข้อมูลที่ residual directions ไม่มี signal — วัดแล้วแย่ลงได้ถึง −0.13
+  บน synthetic บางแบบ) → เข้า tuner grid ให้ตัดสินต่อ dataset
+- ปฏิเสธ: ITQ แบบ PCA-10 (บีบมิติแรงเกิน −14%), Anchor Graph Hashing (−24%),
+  whiten+contrast combo (ไม่ stack — information ซ้อนกัน)
+- รายละเอียด: outputs/LOCALITY_HEADROOM_REPORT.md (Phase 2B section)
+
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
 **Adaptive-depth scoring** (แถวเลือกความลึก prefix เองตามหลักฐาน ≥ tau):

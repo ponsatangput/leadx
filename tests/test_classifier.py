@@ -284,3 +284,33 @@ def test_tuned_diagnostics_match_deployed_model():
         assert t["n_eff"] <= 2 ** clf.config_["n_bits"] + 1  # n_eff จาก codes ของ prefix จริง
     # ต้อง exercise slicing path จริง (ถ้า best == max ทั้งคู่ test นี้ไม่ได้ทดสอบอะไร)
     assert (clf.config_["n_bits"] < 24) or (clf.config_["n_tables"] < 6)
+
+
+def test_pu_contrast_weighting_identifies_signal_dims():
+    # PU: positives เลื่อนใน 4 มิติแรก + noise 40 มิติ — contrast weights ต้องจับถูก
+    rng = np.random.default_rng(0)
+    n_bg, n_pos = 4000, 400
+    bg = rng.standard_normal((n_bg, 44))
+    pos = rng.standard_normal((n_pos, 44)); pos[:, :4] += 1.5
+    df_bg = pl.DataFrame({f"f{i}": bg[:, i] for i in range(44)})
+    df_pos = pl.DataFrame({f"f{i}": pos[:, i] for i in range(44)})
+    clf = LeadX(mode="pu", tune=False, n_bits=8, n_tables=20,
+                score_type="lift", agg="log", feature_weighting="contrast",
+                random_state=0).fit(df_pos, background=df_bg)
+    w = clf.feature_weights_
+    assert w[:4].mean() > 2 * w[4:].mean()
+    # เทียบกับไม่ weight — ranking ต้องดีขึ้นบน mixture
+    from sklearn.metrics import roc_auc_score
+    Xq = np.vstack([rng.standard_normal((1000, 44)),
+                    rng.standard_normal((300, 44)) + np.r_[np.full(4, 1.5), np.zeros(40)]])
+    dfq = pl.DataFrame({f"f{i}": Xq[:, i] for i in range(44)})
+    yq = np.r_[np.zeros(1000), np.ones(300)]
+    base = LeadX(mode="pu", tune=False, n_bits=8, n_tables=20, score_type="lift",
+                 agg="log", random_state=0).fit(df_pos, background=df_bg)
+    assert roc_auc_score(yq, clf.score_samples(dfq)) > roc_auc_score(yq, base.score_samples(dfq))
+
+
+def test_contrast_requires_pu_with_background():
+    df, y = _blobs_df(n_per=30)
+    with pytest.raises(ValueError, match="contrast"):
+        LeadX(mode="two_class", feature_weighting="contrast").fit(df, y)

@@ -83,7 +83,7 @@ class ProjectionBank:
     """
 
     def __init__(self, n_tables=10, n_bits=16, strategy="unsupervised",
-                 hash_mode="median", cat_bit_frac="auto", oversample=10,
+                 hash_mode="median", cat_bit_frac="auto", whiten=False, oversample=10,
                  balance_min=0.40, redundancy_max=0.30, sample_size=100_000,
                  min_seeds_per_class=50, random_state=0):
         if strategy not in ("unsupervised", "supervised"):
@@ -95,6 +95,7 @@ class ProjectionBank:
         self.strategy = strategy
         self.hash_mode = hash_mode
         self.cat_bit_frac = cat_bit_frac
+        self.whiten = whiten
         self.oversample = oversample
         self.balance_min = balance_min
         self.redundancy_max = redundancy_max
@@ -137,6 +138,24 @@ class ProjectionBank:
                 self.strategy_ = "unsupervised"
         idx = rng.permutation(n)[: min(n, self.sample_size)]
         S = Z[idx]
+        # whiten (PCA-whitening พับเข้า P: P_eff = W @ Q) — decorrelate มิติที่ correlated
+        # กันก่อนสุ่มทิศ (วัดจริง home-credit PU: +15-21% rel PR-AUC, unsupervised/reusable)
+        # mean-offset ของ PCA ถูกดูดซับใน median threshold อัตโนมัติ
+        self._whiten_mat = None
+        if self.whiten:
+            if self.hash_mode == "origin":
+                warnings.warn("whiten ใช้ได้เฉพาะ hash_mode='median' — ข้าม")
+            else:
+                from sklearn.decomposition import PCA
+                n_comp = int(min(64, Z.shape[1], len(S) - 1))
+                pca = PCA(n_components=n_comp, whiten=True, svd_solver="randomized",
+                          random_state=self.random_state).fit(S)
+                self._whiten_mat = (
+                    pca.components_.T / np.sqrt(pca.explained_variance_ + 1e-12)
+                ).astype(np.float32)
+                if self._cat_mask is not None:
+                    warnings.warn("whiten ผสมทุกมิติ — ข้าม cat_bit_frac (typed bits)")
+                    self._cat_mask = None
         y_s = np.asarray(y, dtype=np.float64)[idx] if self.strategy_ == "supervised" else None
         tables, thresholds, self._table_diag = [], [], []
         for _ in range(self.n_tables):
@@ -188,7 +207,18 @@ class ProjectionBank:
         ไม่ต้องคัด balance/resample. unsupervised = สุ่ม B ทิศ (QR); supervised =
         oversample แล้วจัดอันดับด้วย cross-fitted IG (เรียงมาก→น้อย เพื่อ prefix masking)"""
         d = S.shape[1]
-        if self._cat_mask is not None:
+        if self._whiten_mat is not None:
+            dw = self._whiten_mat.shape[1]
+            if self.strategy_ == "supervised":
+                Cw = self._candidates(dw, rng)
+            else:
+                Cw, _ = np.linalg.qr(rng.standard_normal((dw, min(dw, self.n_bits))))
+                while Cw.shape[1] < self.n_bits:
+                    Q2, _ = np.linalg.qr(rng.standard_normal((dw, min(dw, self.n_bits - Cw.shape[1]))))
+                    Cw = np.hstack([Cw, Q2[:, : self.n_bits - Cw.shape[1]]])
+            C = self._whiten_mat @ Cw
+            C /= np.linalg.norm(C, axis=0, keepdims=True) + 1e-12
+        elif self._cat_mask is not None:
             C = self._typed_candidates(d, rng)
         elif self.strategy_ == "supervised":
             C = self._candidates(d, rng)                     # oversample × n_bits

@@ -62,3 +62,33 @@ variance ข้าม draws ต่ำทุกวิธี (std ≤ 0.005) | cos
 - src/leadx/tuning.py (DEFAULT_GRID: n_tables += [40])
 - tests/test_tuning.py (assertion grid ใหม่)
 - README/DESIGN_NOTES (PU config guidance + Phase-1 summary)
+
+
+---
+
+# Phase 2B — Learned Geometry (ผลและสิ่งที่ ship)
+
+harness เดียวกับ Phase 1 (home-credit PU, 10 draws × 2 fracs), baseline = b10 K80:
+
+| method | 10% seeds | 25% seeds | gate (vs baseline) |
+|---|---|---|---|
+| **pu_diag (contrast weights, task-aware)** | **0.2011** | **0.2026** | **+30%/+26% rel, 10/10 ← ผ่าน** |
+| **pca_rr (whiten, unsupervised-reusable)** | **0.1789** | **0.1952** | **+16%/+21% rel, 10/10 ← ผ่าน** |
+| pu_guided (1 bit seed-contrast/table) | 0.1648 | 0.1708 | +6% 10/10 ผ่านแต่ถูก pu_diag ครอบ |
+| baseline b10 K80 | 0.1548 | 0.1609 | — |
+| itq (PCA-10 + ITQ rotation) | 0.1337 | 0.1375 | −14% ปฏิเสธ (บีบมิติแรงเกิน) |
+| agh (anchor embedding 200) | 0.1191 | 0.1211 | −24% ปฏิเสธ |
+
+- combo whiten+contrast: ไม่ stack (0.2005 ≈ pu_diag เดี่ยว) — information ซ้อนกัน
+- **คำเตือนสำคัญ: whiten เป็น data-dependent** — synthetic ที่ residual directions เป็น
+  noise ล้วน whiten ทำร้าย (0.946→0.813) เพราะขยาย noise ให้เท่า signal → จึงเข้า
+  **tuner grid** ("whiten": [False, True]) ให้ตัดสินต่อ dataset ไม่ตั้ง always-on
+
+**Shipped เข้า library:**
+- `whiten=True` (ProjectionBank/LeadX/backbone/Tuner grid) — PCA-whitening พับเข้า P
+  (`P_eff = W @ Q`) → pipeline/save-load ไม่เปลี่ยน; unsupervised → **ใช้กับ backbone
+  reuse ได้**
+- `feature_weighting="contrast"` (pu + background) — weights = |mean(seeds) − mean(bg)|
+  task-aware (ปิด reuse); library reproduce prototype: 0.2027 ≈ 0.2011
+
+verify library vs prototype (3 draws): baseline 0.1506 / whiten 0.1675 / contrast 0.2027

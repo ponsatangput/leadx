@@ -46,11 +46,13 @@ class LeadXBackbone:
     """
 
     def __init__(self, n_bits=16, n_tables=15, hash_mode="median",
-                 cat_bit_frac="auto", random_state=0, chunk_size=1_000_000):
+                 cat_bit_frac="auto", whiten=False, random_state=0,
+                 chunk_size=1_000_000):
         self.n_bits = n_bits
         self.n_tables = n_tables
         self.hash_mode = hash_mode
         self.cat_bit_frac = cat_bit_frac
+        self.whiten = whiten
         self.random_state = random_state
         self.chunk_size = chunk_size
 
@@ -80,7 +82,7 @@ class LeadXBackbone:
         bank = ProjectionBank(
             n_tables=self.n_tables, n_bits=self.n_bits, strategy="unsupervised",
             hash_mode=self.hash_mode, cat_bit_frac=self.cat_bit_frac,
-            random_state=self.random_state,
+            whiten=self.whiten, random_state=self.random_state,
         ).fit(Z, cat_mask=self.encoder_.cat_mask_)
         self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         self.diagnostics_ = bank.diagnostics()
@@ -168,6 +170,7 @@ class LeadXBackbone:
         meta = {
             "n_bits": self.n_bits, "n_tables": self.n_tables,
             "hash_mode": self.hash_mode, "cat_bit_frac": self.cat_bit_frac,
+            "whiten": self.whiten,
             "random_state": self.random_state, "chunk_size": self.chunk_size,
             "encoder": self.encoder_.to_dict(), "polars_version": pl.__version__,
         }
@@ -182,6 +185,7 @@ class LeadXBackbone:
         bb = cls(n_bits=meta["n_bits"], n_tables=meta["n_tables"],
                  hash_mode=infer_hash_mode(meta.get("hash_mode"), thresholds),
                  cat_bit_frac=meta.get("cat_bit_frac", "auto"),
+                 whiten=meta.get("whiten", False),
                  random_state=meta["random_state"], chunk_size=meta["chunk_size"])
         bb.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
         bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
