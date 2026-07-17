@@ -211,6 +211,23 @@ numeric bits เพื่อให้ prefix masking เหลือทั้ง
 
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
+**Adaptive-depth scoring** (แถวเลือกความลึก prefix เองตามหลักฐาน ≥ tau):
+ไม่ช่วย (B=20: 0.918 vs fixed 0.940) — กลไก lift fallback=1 + multi-probe ทำหน้าที่
+"ถอยเมื่อหลักฐานบาง" อยู่แล้วแบบ implicit และดีกว่า (ไม่ทิ้งหลักฐาน 1-2 seeds)
+**ผลพลอยได้สำคัญ:** การวัดนี้เผยว่า**หน้าผา coverage (#2) ถูก lift redesign แก้ไป
+เงียบๆ แล้ว** — B=20 direct-miss 73% แต่ AUC ดีสุดในตาราง เพราะ fallback=1 ใน
+geometric mean = "table ไม่มีหลักฐานก็ไม่โหวต" ไม่ใช่โหวตค่าผิดแบบ prop/prior เดิม
+→ ตาราง failure mode #2 สะท้อนพฤติกรรมของ prop scoring; ภายใต้ lift หน้าผาตื้นกว่ามาก
+
+**Pair-difference directions** (ทิศจากผลต่างคู่จุด, rpTree-style):
+ไม่ช่วยทุก dataset (แย่ลง 0.005–0.014) — encoder standardize ทำ variance เท่ากันทุกแกน
+แล้ว ทิศ gaussian จึงเหมาะสมอยู่แล้ว (บนข้อมูลดิบคงช่วย แต่ pipeline ไม่เจอข้อมูลดิบ)
+
+**บทสรุปเชิงทิศทาง:** หลัก "localize + กระจายดี" ถูกดูดซับเกือบหมดแล้วผ่าน tie-aware
+median (กระจาย/bit) + K tables + lift/log (locality) + fallback=1/multi-probe (adaptive
+resolution โดยพฤตินัย) — คานงัดที่เหลือ: rpTree hierarchical partition (การันตี equal-mass
+โดยโครงสร้าง — งาน v3 ใหญ่, แลก single-matmul) และ validation กับข้อมูลจริง
+
 **Feature bootstrap / random subspace ต่อ table** (สุ่ม subset ของ features ให้แต่ละ
 hash table) — หวังแก้ noise dilution แบบ unsupervised (รักษา backbone reuse):
 
