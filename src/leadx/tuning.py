@@ -12,7 +12,7 @@ from .scoring import SeedScorer
 
 DEFAULT_GRID = {
     "n_bits": [8, 12, 16, 20, 24],
-    "n_tables": [3, 5, 10, 20],
+    "n_tables": [3, 5, 10, 20, 40],
     "m": [1.0, 10.0, 50.0],
     "weights": ["mean", "coverage"],
     "strategy": ["unsupervised", "supervised"],

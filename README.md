@@ -79,7 +79,7 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 ### PU learning (มีแต่ positive ที่ยืนยันแล้ว)
 
 ```python
-clf = LeadX(mode="pu")
+clf = LeadX(mode="pu", n_bits=10, n_tables=80)   # PU ชอบ bits ต่ำ + tables เยอะ
 clf.fit(X_positive)                     # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
 scores = clf.score_samples(X_large)     # ranking score 0..1 (ไม่ใช่ probability)
 

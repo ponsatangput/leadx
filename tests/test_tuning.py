@@ -126,3 +126,9 @@ def test_tuner_exposes_winning_bank_prefix():
     assert bank.P_.shape[0] == max(grid["n_tables"])
     assert bank.P_.shape[2] == max(grid["n_bits"])
     assert bank.strategy_ == best["strategy"]
+
+
+def test_default_grid_includes_deep_tables():
+    # Phase-1 locality headroom: K=40 ให้ +15-24% rel PR-AUC บน PU จริง (home-credit)
+    from leadx.tuning import DEFAULT_GRID
+    assert 40 in DEFAULT_GRID["n_tables"]

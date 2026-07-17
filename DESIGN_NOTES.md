@@ -230,6 +230,17 @@ recall@top10% 21.3% (สุ่ม 10%) ที่ boosting รันไม่ไ�
 จำนวน positive สัมบูรณ์พร้อมกัน) — invariance ต้องทดสอบแบบตรึง N_pos แล้วแปร negative
 เท่านั้น
 
+## 5.6 Phase-1 Locality headroom (จาก literature-review proposal)
+
+Exact-kNN oracle gate บน home-credit PU (รายละเอียด outputs/LOCALITY_HEADROOM_REPORT.md):
+**gate ไม่ผ่าน → geometry headroom เล็ก → Phase 2A (local projection forest) ไม่คุ้ม**
+เส้นทางถัดไปคือ representation (Phase 2B: ITQ/PCA cross-fit, task-aware transform)
+
+**กำไรที่เจอระหว่างทาง:** tables scaling — b10,K=80 ชนะ kNN-oracle ที่ 10% seeds
+(0.1548 vs 0.1422) และ +24% rel เหนือ config เดิม → DEFAULT_GRID เพิ่ม K=40;
+คำแนะนำ PU: b8–10, K=40–80 ("more tables > more bits" ยืนยันแล้ว)
+ปฏิเสธเพิ่ม: mode-aware scoring (แย่ลงทุกกรณี), PU-refinement (ถูก tables scaling ครอบ)
+
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
 **Adaptive-depth scoring** (แถวเลือกความลึก prefix เองตามหลักฐาน ≥ tau):
