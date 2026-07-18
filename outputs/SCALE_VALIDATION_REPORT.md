@@ -20,10 +20,14 @@ features** — รายงานนี้วัดที่ scale นั้น�
 
 ## อ่านผล
 
-1. **จุดเด่นข้อ 1 ยืนที่ 10M**: จ่าย backbone 51s + โจทย์แรก 21s ครั้งเดียว
-   → ทุกโจทย์ถัดไป **~40ms** (group-by ของ seeds เท่านั้น) เทียบ HistGB ~115s
-   ต่อโจทย์ที่ต้อง label เต็ม: 20 โจทย์ = 73s vs ~2,300s (**~30x**); ยิ่งหลายโจทย์
-   ยิ่งห่าง (asymptote = 0.04s vs 115s ต่อโจทย์เพิ่ม ≈ 3,000x marginal)
+1. **จุดเด่นข้อ 1 ยืนที่ 10M** — แยกให้ชัดสามก้อน: backbone construction 51s
+   (ครั้งเดียว), **task-head construction ~0.04s/โจทย์** (group-by ของ seeds บน
+   cached codes — นี่คือความหมายของ "0.04s/task"), และ **full-population scoring
+   ~31s/โจทย์** (จัดอันดับ 10M แถว)
+   - เทียบ **fit-vs-fit เท่านั้น**: 20 โจทย์ = 73s vs HistGB ~2,300s (fit อย่าง
+     เดียว, ~30x) — ตัวเลขนี้*ไม่รวม scoring ทั้งสองฝั่ง*
+   - เทียบ **end-to-end รวม scoring ประชากร**: 20 โจทย์ ≈ 73 + 20×31 ≈ 700s vs
+     HistGB fit+predict ≈ 2,900s+ → **~4x** — อย่าอ้าง 30x เป็น end-to-end
 2. **Linear scaling ทุก stage** (หลัง fix): backbone 9.6→17.4→50.8s,
    score 3.0→9.6→31.2s ต่อ 1M→3M→10M; peak RSS 12.2GB ที่ 10M — เครื่อง
    laptop 24GB เอาอยู่ ไม่ต้อง out-of-core ที่ scale นี้
@@ -41,6 +45,11 @@ features** — รายงานนี้วัดที่ scale นั้น�
 ทั้งคู่มี equivalence test คุม (ผล identical กับ path เดิม) — ROC ทุกค่าตรงกับรอบแรกเป๊ะ
 
 ## Caveats
+
+- benchmark นี้ใช้ **reusable backbone ล้วน** (ไม่มี feature weighting/contrast/
+  rpforest) — คนละ configuration กับผล rare-event (IMBALANCE_FOCUS ที่ใช้
+  contrast+rpforest แบบ task-specific): จุดขาย "เร็ว/reuse" กับ "แม่นที่ rare"
+  พิสูจน์แยกกัน ยังไม่มีหลักฐานว่าได้พร้อมกัน
 
 - synthetic data (gaussian + planted linear signal) — เพียงพอสำหรับคำถาม
   เวลา/หน่วยความจำ/เสถียรภาพ แต่ตัวเลข ROC ไม่ใช่ claim ความแม่นบนข้อมูลจริง

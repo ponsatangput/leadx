@@ -330,7 +330,7 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | noise features กลบ signal | `feature_weighting="corr"` (หลัง standardize เท่านั้น) | D=200: 0.79 → 0.97 |
 | one-hot ทั้ง 0/1 ตกฝั่งเดียวของ plane | `cat_bit_frac` type-aware bits + tuner เลือกสัดส่วน | cat-signal: 0.53 → 0.93; numeric ไม่ regress |
 | จูนครั้งเดียวใช้หลายโจทย์ | `LeadXBackbone` + `y_ref` shared weights | 30ms/โจทย์; related tasks +0.25 AUC |
-| bugs (batch-dependent PU, NaN, dead bits, config identity, tuner consistency) | fixes + regression tests (ปัจจุบัน 112 tests) | ทุกข้อมี test คุม |
+| bugs (batch-dependent PU, NaN, dead bits, config identity, tuner consistency) | fixes + regression tests (ปัจจุบัน 122 tests) | ทุกข้อมี test คุม |
 | audit P0: OOF leakage / benchmark↔production parity | cross-fit ต่อ fold, PU bg split, encoder fit จาก background | ตัวเลขรายงานเชื่อได้ (noise-leak bound test) |
 | variance ที่ seeds น้อยมาก (โซนธง imbalance) | `hier_depths` — EB shrink เข้าหา bucket แม่ข้าม prefix depths | +41% fraud 0.3%, +15% fraud 0.1% (§8d) |
 | scalability ที่ 10M แถว (โจทย์ตั้งต้น) | encoder preallocate f32 + `BackgroundStats` cache + `seed_rows`/`score_cached` | backbone 351s→51s; โจทย์ 2+ = 0.04s (§8e) |
@@ -338,7 +338,7 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | rpforest ใช้กับ auto-tune ไม่ได้ | "engine" เป็นมิติใน tuner grid + `RPForest.prefix` + fit vectorized (−40%) + facade `engine="auto"` | tuner เลือก engine ต่อ dataset จาก OOF; deploy = prefix ที่วัดจริง (§8f) |
 
 **เส้นทางตัวเลขธง (home-credit PU 10% seeds, PR-AUC, parity ทุกจุด):**
-0.194 (baseline หลังปิด leakage) → 0.196 (+hier) → **0.208 (+rpforest, +7% รวม)**
+0.194 (baseline หลังปิด leakage) → 0.196 (+hier) → **0.208 (+rpforest; paired +5.4%, 3/3 draws — +7% รวม)**
 — extreme cells: fraud 0.3% 0.0235→0.0595 (2.5x), HC 0.3% 0.0047→0.0066 (+42%)
 
 **Top-3 การปรับที่มีค่าที่สุด:** (1) lift scoring — เปลี่ยน positioning ด้วยคณิตศาสตร์
@@ -365,7 +365,8 @@ textbook และผ่านด่านเดียวกัน: prototype �
 
 **การแก้ claim ของ audit:** contrast บน fraud ไม่ได้แพ้ — ด้วย baseline b10K80
 (config production) contrast **ชนะ fraud 5/5 (+10%: 0.274 vs 0.250)** — ผล −3%
-ของ audit มาจาก baseline K เล็ก → contrast general กว่าที่ audit สรุป
+ของ audit วัดภายใต้เงื่อนไข/baseline ที่ต่างจากของเรา (สาเหตุของส่วนต่างยังไม่ถูก
+isolate) → contrast general กว่าที่ audit สรุป
 (whiten ยังคง dataset-specific จริงตาม audit: แพ้ fraud ทุกแบบ)
 
 ## 8c. Imbalance-focus benchmark (2026-07-18) — นิยาม "ดีกว่าวิธีอื่น" ให้ชัด
@@ -384,10 +385,12 @@ l2=0 พังที่ 0.1% ROC 0.53 ทุก random_state → เกือบ
   84→94% ของ oracle, fraud 58→69% — claim ที่ยืนได้คือ label-efficiency
 - **degrade นุ่มนวลสุด** (fraud ROC, positives หาย 30x): leadx −0.04 ≈ oracle −0.05
   << PU-naive −0.19, logreg −0.23 — invariance ของ lift โผล่บนข้อมูลจริง
-- **update หลัง rpforest (§8f)**: rerun ด้วย config ธงใหม่ — crossover ขยับ:
-  HC ชนะ PU-naive ทุก ratio ที่วัด (รวม 3%), fraud ขยับจาก 0.1% → 0.3%
-  (.0595 vs .0366); HC allseeds = 91-137% ของ oracle จูนแล้ว (**ชนะ oracle
-  ที่ 0.3%**: .0102 vs .0074) — ดู IMBALANCE_FOCUS_REPORT update section
+- **update หลัง rpforest (§8f)**: rerun ด้วย config ธงใหม่ — ชนะ PU-naive
+  **5/7 regimes** (HC ทุก ratio; fraud 0.3% และ 0.1% — 0.1% ชนะ 2/3 draws
+  variance สูง; แพ้ fraud 3%/1%); HC allseeds = 91-137% ของ oracle จูนแล้ว
+  (ชนะที่ 0.3% **เฉพาะ allseeds, split เดียว** — ที่ 10% seeds ยังแพ้) —
+  ทั้งหมดเป็น rarity stress test บน fixed split เดียว, ยังไม่เทียบ strong PU
+  methods — ดู IMBALANCE_FOCUS_REPORT update section
 
 ## 8d. Hierarchical shrinkage — shipped (2026-07-18)
 
@@ -437,9 +440,13 @@ memory ceiling และ "จ่ายซ้ำ" เจ็บจริงเม�
 P2 ตัวแรกที่ลงมือ (ตามการตัดสินใจของเจ้าของ) — และ **สมมติฐาน mega-bucket จาก
 ต้นโปรเจกต์ได้รับการยืนยันบนข้อมูลจริง**: bank เดิมบน fraud มี bucket เดียวกิน
 6.3% ของประชากร (p99 = 2,509 แถว) ขณะที่ rpTree แคปที่ 0.098% (p99 = 199)
-โดยโครงสร้าง — ทิศสุ่มใหม่ + median ท้องถิ่นต่อ node = equal-mass partition
+โดยโครงสร้าง — ทิศสุ่มใหม่ + median ท้องถิ่นต่อ node = partition ที่ *balanced โดยประมาณบน
+fit sample* (≤200k; ties อาจทำ split เบี้ยว และไม่การันตี balance บน unseen
+data/drift) — ต่างจาก SimHash-LSH: เป็น data-dependent recursive tree
 
-ผลวัด (PU b10 K80 + contrast + hier, median 3 draws, gate ตั้งก่อนเห็นผล):
+ผลวัด (PU b10 K80 + contrast + hier, median 3 draws, gate ตั้งก่อนเห็นผล;
+Δ ในตาราง = ratio-of-medians ซึ่ง median สองฝั่งอาจมาจากคนละ draw — ดู
+paired per-draw ที่ระมัดระวังกว่าใต้ตาราง):
 
 | cell | bank+hier | rpf+hier | Δ rel |
 |---|---|---|---|
@@ -449,8 +456,16 @@ P2 ตัวแรกที่ลงมือ (ตามการตัดสิ
 | fraud 0.1% | .0099 | .0097 | −1.6% (เสมอ — 20 seeds, signal-limited) |
 | **natural 8%** | .1964 | **.2081** | **+6% — new best home-credit PU** |
 
-**Gate ผ่าน** (3/4 extreme + natural ไม่ regress — ชนะด้วยซ้ำ) → ship เป็น
-`engine="rpforest"` (opt-in) บน LeadX + Backbone: leaf code มี MSB prefix =
+**Gate:** ผ่านตามเกณฑ์เดิม (ratio-of-medians: 3/4 extreme + natural +6%) —
+แต่ **paired per-draw analysis** (คู่ draw เดียวกัน — วิธีที่ถูกกว่าเพราะ median
+สองฝั่งอาจมาจากคนละ draw) ให้ภาพระมัดระวังกว่า: fraud 0.3% **+10.7%**,
+HC 0.3% **+38.4%**, natural **+5.4%** (3/3 draws) ผ่าน >2%; แต่ HC 1% +1.9%
+(ก้ำกึ่ง) และ fraud 0.1% **−1.7%** ไม่ผ่าน → หลักฐานสนับสนุน rpforest เป็น
+**engine ทางเลือกแบบ regime-dependent ไม่ใช่ชนะสม่ำเสมอ** — สอดคล้องกับการ
+ship เป็น opt-in + ให้ tuner เลือกต่อ dataset; หมายเหตุ: gate run ใช้ prototype
+class ใน script (ก่อน vectorized fit ที่เปลี่ยน RNG stream — re-validate แล้ว
+เฉพาะ natural cell 0.206) — ควร rerun paired ผ่าน public API ก่อนสรุปถาวร
+→ ship เป็น `engine="rpforest"` (opt-in) บน LeadX + Backbone: leaf code มี MSB prefix =
 tree path → SeedScorer/hier/mask_codes/BackgroundStats ใช้ร่วมได้ทั้งชุดไม่แก้อะไร
 
 Trade-offs ที่จดไว้: fit+transform ~2-4.5x ของ single-matmul; model size
@@ -516,7 +531,7 @@ whiten/contrast ชนะทั่วไป; whiten ต้องเป็น opt
    - tune ความแรง `lambda` แบบ cross-fit; ทดลอง clipped/rank weights กัน seed noise และ
      contaminated background; แยก numeric/categorical relevance.
 
-3. **Overcomplete table selection (ยังไม่ได้ทำ)**
+3. ~~**Overcomplete table selection**~~ — ✅ ทดลองแล้ว **ปฏิเสธ** (§8b: greedy แพ้ "ใช้ทั้งหมด")
    - สร้าง 120–160 candidate tables แล้วเลือก 40–80 จาก held-out marginal PU gain.
    - objective ต้องมี locality quality floor + positive-mode coverage − residual redundancy;
      occupancy/`n_eff` เป็น guardrail ไม่ใช่เป้าหมาย.

@@ -4,7 +4,7 @@
 
 Fast classification บนข้อมูลขนาดใหญ่ (ระดับ 10M rows) ด้วย **Locality-Sensitive Hashing (LSH)** + **seed-based bucket scoring** — เหมาะกับงาน lead scoring / PU ranking ที่มี positive ยืนยันไม่กี่ตัวแต่ข้อมูลมหาศาล
 
-แทนที่จะเรียนรู้ decision boundary แบบ model ทั่วไป `leadx` ใช้ LSH แบ่งข้อมูลเป็น bucket แล้วให้คะแนนแต่ละ bucket จากสัดส่วนของ "seeds" (ตัวอย่างที่มี label) ที่ตกลงไปในนั้น — ทำให้ **fit และ predict เป็น batch operation ล้วน** (matrix multiply + group-by) ไม่มี loop ต่อแถว จึง scale ได้ถึงหลักสิบล้านแถวในเวลาไม่กี่วินาที เชิงทฤษฎีมันคือ **approximate soft-kNN**: bucket-density ในละแวกรหัสเดียวกัน ≈ soft kNN ที่แลกความแม่นของ neighbor จริงกับความเร็วของ hash lookup
+แทนที่จะเรียนรู้ decision boundary แบบ model ทั่วไป `leadx` ใช้ LSH แบ่งข้อมูลเป็น bucket แล้วให้คะแนนแต่ละ bucket จากสัดส่วนของ "seeds" (ตัวอย่างที่มี label) ที่ตกลงไปในนั้น — ทำให้ **fit และ predict เป็น batch operation ล้วน** (matrix multiply + group-by) ไม่มี loop ต่อแถว จึง scale ได้ถึงหลักสิบล้านแถว (วัดจริงที่ 10M: backbone 51s ครั้งเดียว, จัดอันดับประชากรทั้งก้อน ~31s ต่อโจทย์) เชิงทฤษฎีมันคือ **approximate soft-kNN**: bucket-density ในละแวกรหัสเดียวกัน ≈ soft kNN ที่แลกความแม่นของ neighbor จริงกับความเร็วของ hash lookup
 
 ```
 fit 20,000 seeds × 50 features → 0.4s
@@ -42,7 +42,7 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 | ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — model คือ dict lookup |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
 | **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
-| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **เมื่อไม่มี labeled negatives (PU)** — ด้วย `engine="rpforest"`: home-credit ชนะ HistGB PU-naive **ทุก ratio ที่วัด** (ถึง 3%), fraud ชนะตั้งแต่ 0.3% ลงไป (1.6x PR, lift@0.1% 83x vs 61x) และ degrade นุ่มนวลสุด (ROC −0.04 เมื่อ positives หาย 30 เท่า vs PU-naive −0.19); เทียบ **oracle label เต็มจูนแล้ว**: 91-95% ที่ 3-1% และ**ชนะที่ 0.3%** (home-credit) — fraud ปานกลาง (>=1%) ที่ seeds หลักร้อย PU-naive ยังนำ (outputs/IMBALANCE_FOCUS_REPORT.md) |
+| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **preliminary — เมื่อไม่มี labeled negatives (PU)**: บน rarity stress test (real features, downsample positives; split เดียว, 3 seed draws) config `rpforest+hier+contrast` ที่ 10% confirmed seeds ชนะ balanced HistGB PU-naive **5/7 regimes** — home-credit ทุก ratio ที่วัด (3%–0.3%), fraud 0.3% (1.6x) และ 0.1% (ชนะ 2/3 draws, variance สูง); **แพ้ fraud 3%/1%**; degrade นุ่มนวลสุด (ROC −0.04 เมื่อ positives หาย 30 เท่า vs PU-naive −0.19); เทียบ oracle label เต็มจูนแล้ว: 91-95% ที่ 3-1% และชนะที่ HC 0.3% เฉพาะ **allseeds setting, split เดียว** (ที่ 10% seeds ยังแพ้); ยังไม่เทียบ strong PU methods จาก literature (outputs/IMBALANCE_FOCUS_REPORT.md) |
 | **imbalanced ปานกลาง** (1–10%) ที่มี labeled negatives | ❌ **ไม่** — boosting ยังชนะ (PR-AUC สูงกว่า) |
 
 รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
@@ -79,9 +79,11 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 ### PU learning (มีแต่ positive ที่ยืนยันแล้ว)
 
 ```python
-# config แนะนำสำหรับ PU: bits ต่ำ + tables เยอะ + rpforest + hier
-# (แม่นสุดที่วัดได้: home-credit PU 0.208 vs hyperplane 0.196 — ดู DESIGN_NOTES §8f;
-# ถ้าต้องการ fit เร็ว/model เล็ก ตัด engine/hier ออก = hyperplane เดิม)
+# config ธง (opt-in — ไม่ใช่ default/auto): bits ต่ำ + tables เยอะ + rpforest + hier
+# (แม่นสุดที่วัดได้บน home-credit PU: 0.208 vs hyperplane 0.196 — DESIGN_NOTES §8f)
+# หมายเหตุ: contrast+rpforest ทำ geometry เป็น task-specific — คนละ configuration
+# กับ reusable backbone (จุดขาย build-once/reuse) ซึ่งวัดแยกกัน ยังไม่พิสูจน์พร้อมกัน
+# ถ้าต้องการ fit เร็ว/model เล็ก/reuse: ตัด engine/hier/contrast ออก
 clf = LeadX(mode="pu", tune=False, n_bits=10, n_tables=80,
             score_type="lift", agg="log", feature_weighting="contrast",
             engine="rpforest", hier_depths="auto")
@@ -170,7 +172,7 @@ project เฉพาะ categorical blocks (+tie-aware threshold = bipartition �
 | `mode` | `"two_class"` / `"pu"` | label สองฝั่ง / positive-unlabeled |
 | `strategy` | `"unsupervised"` (default) / `"supervised"` | คัด projection vectors แบบไม่ใช้ / ใช้ label (auto-tune ลองทั้งคู่) |
 | `weights` | `"mean"` (default) / `"coverage"` | รวม score ข้าม tables แบบเฉลี่ยตรง / ถ่วงให้ table ที่ miss เยอะพูดเบาลง |
-| `engine` | `"auto"` (default) / `"hyperplane"` / `"rpforest"` | วิธีสร้าง codes: hyperplanes (single-matmul) / **balanced rpTree forest** — ทิศสุ่ม+median ท้องถิ่นต่อ node → bucket เท่ากันโดยโครงสร้าง ไม่มี mega-bucket (วัดจริง PU: fraud 0.3% **+39%**, home-credit natural **+6% = best ปัจจุบัน 0.208**; fit ~2-4x, model ใหญ่กว่า) — `"auto"` + `tune=True` ให้ tuner ประเมิน**ทั้งสอง engine** แล้วเลือกจาก OOF (forest จำกัด depth ≤ 12 ใน grid) |
+| `engine` | `"auto"` (default) / `"hyperplane"` / `"rpforest"` | วิธีสร้าง codes: hyperplanes (SimHash-LSH, single-matmul) / **rpTree forest** — data-dependent recursive tree (ไม่ใช่ LSH ตระกูล SimHash): ทิศสุ่ม+median ท้องถิ่นต่อ node → bucket *balanced โดยประมาณบน fit sample* (≤200k แถว; ties/unseen data/drift ทำให้เบี่ยงได้) — ผลวัด PU 10% seeds เป็น **regime-dependent**: paired per-draw fraud 0.3% +11%, HC 0.3% +38%, natural +5% แต่ fraud 0.1% −2%, HC 1% +2% → จึงเป็น opt-in และให้ tuner เลือกต่อ dataset; fit ~2-4x, model ใหญ่กว่า — `"auto"` + `tune=True` ประเมิน**ทั้งสอง engine** จาก OOF (forest depth ≤ 12 ใน grid), `"auto"` + `tune=False` = hyperplane |
 | `hier_depths` | `None` (default) / `"auto"` / tuple | hierarchical shrinkage ข้าม prefix depths (lift เท่านั้น): bucket ลึกที่หลักฐานบาง inherit lift จาก bucket แม่ — **+6-41% rel PR-AUC ที่ imbalance 1%-0.1%** (seeds หลักสิบ), natural rate ไม่ regress; **เปิดเมื่อ seeds น้อย** — ที่ seeds หลักร้อยขึ้นไป (fraud allseeds) hier dilute ~10-19% ปิดดีกว่า; `"auto"` = (4,6,...,n_bits) |
 | `feature_weighting` | `"none"` (default) / `"corr"` / `"contrast"` | ถ่วง feature ก่อน hash: `"corr"` = \|corr กับ y\| (two_class); `"contrast"` = \|mean(seeds)−mean(bg)\| (pu + background — **+26-30% rel PR-AUC บน home-credit PU**) — ทั้งคู่ task-aware ปิด reuse |
 | `score_type` | `"prop"` (default) / `"lift"` | สัดส่วน smoothed / density ratio (lift) — lift เป็น **imbalance-invariant**: prior ไม่อยู่ในสูตร, fallback = 1 (เป็นกลาง), สเกลตีความได้ ("เข้มข้นกว่าค่าเฉลี่ย 3 เท่า") |
@@ -363,8 +365,13 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 | home-credit 3% / 1% / 0.3% | **.078 / .024 / .0066** | .074 / .018 / .0035 | .092 / .032 / .0074 |
 | fraud 0.3% / 0.1% | **.060 / .011** | .037 / .0025 | .159 / .055 |
 
-- ชนะ PU-naive: home-credit **ทุก ratio ที่วัด**, fraud ตั้งแต่ 0.3% ลงไป
-- allseeds เทียบ oracle: home-credit 91–95% ที่ 3–1% และ**ชนะที่ 0.3%** (137%)
+- ชนะ PU-naive **5/7 regimes**: home-credit ทุก ratio ที่วัด, fraud 0.3%/0.1%
+  (0.1% ชนะ 2/3 draws — variance สูง); **แพ้ fraud 3%/1%**
+- allseeds เทียบ oracle: home-credit 91–95% ที่ 3–1% และชนะที่ 0.3% —
+  **เฉพาะ allseeds, split เดียว** (ที่ 10% seeds = 29 ตัว ยังแพ้ .0066 vs .0074)
+- ขอบเขตหลักฐาน: rarity stress test บน fixed split เดียว (downsample positives),
+  3 seed draws, ยังไม่เทียบ strong PU methods; config นี้ task-specific
+  (contrast) — ไม่ใช่ reusable backbone
 - รายละเอียด+raw: outputs/IMBALANCE_FOCUS_REPORT.md (ตาราง Large+imbalanced
   ด้านล่างเป็นผลยุคแรกก่อน lift/contrast/rpforest — เก็บไว้เป็นประวัติ)
 
@@ -376,8 +383,10 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 | 10M | 50.8s | **0.04s** | 31.2s | ~115s (extrapolate) |
 
 หลายโจทย์บนประชากรเดียว: `bb.fit_task(seed_rows=..., background="cached")` +
-`task.score_cached()` — โจทย์ใหม่จ่ายแค่ group-by ของ seeds (~40ms ที่ 10M);
-ดู outputs/SCALE_VALIDATION_REPORT.md
+`task.score_cached()` — **~40ms คือสร้าง task head** จาก cached codes เท่านั้น
+(จัดอันดับประชากร 10M เพิ่ม ~31s ต่อโจทย์ — ดูคอลัมน์แยกในตาราง); benchmark นี้ใช้
+backbone ล้วน (ไม่มี contrast/rpforest) — คนละ config กับผล rare-event ด้านบน
+สองจุดขายจึงพิสูจน์แยกกัน ยังไม่ได้พิสูจน์พร้อมกัน; ดู outputs/SCALE_VALIDATION_REPORT.md
 
 ### Large + imbalanced (PR-AUC — เหมาะ imbalanced กว่า ROC-AUC)
 
