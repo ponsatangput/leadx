@@ -142,6 +142,7 @@ class ProjectionBank:
         # กันก่อนสุ่มทิศ (วัดจริง home-credit PU: +15-21% rel PR-AUC, unsupervised/reusable)
         # mean-offset ของ PCA ถูกดูดซับใน median threshold อัตโนมัติ
         self._whiten_mat = None
+        self.whiten_applied_ = False
         if self.whiten:
             if self.hash_mode == "origin":
                 warnings.warn("whiten ใช้ได้เฉพาะ hash_mode='median' — ข้าม")
@@ -153,6 +154,7 @@ class ProjectionBank:
                 self._whiten_mat = (
                     pca.components_.T / np.sqrt(pca.explained_variance_ + 1e-12)
                 ).astype(np.float32)
+                self.whiten_applied_ = True
                 if self._cat_mask is not None:
                     warnings.warn("whiten ผสมทุกมิติ — ข้าม cat_bit_frac (typed bits)")
                     self._cat_mask = None

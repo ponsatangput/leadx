@@ -149,3 +149,65 @@ def test_tuner_covers_all_strategy_whiten_combos():
     combos = set(zip(t.results_["strategy"].to_list(), t.results_["whiten"].to_list()))
     assert combos == {("unsupervised", False), ("unsupervised", True),
                       ("supervised", False), ("supervised", True)}
+
+
+def test_oof_no_leak_on_pure_noise_with_weighting():
+    # audit P0: เดิม weights คำนวณจาก y ทั้งชุดก่อน tune → OOF optimistic บน noise ล้วน
+    # หลัง cross-fit ต่อ fold: best score บน noise ต้อง ~0.5 (ไม่มีอะไรให้เรียนจริง)
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((800, 60)).astype(np.float32)   # noise ล้วน มิติเยอะ
+    y = (rng.random(800) < 0.5).astype(float)               # y สุ่ม ไม่เกี่ยวกับ X
+    grid = {"n_bits": [8], "n_tables": [8], "m": [10.0], "weights": ["mean"],
+            "strategy": ["unsupervised"], "score_type": ["lift"], "alpha": [2.0],
+            "agg": ["log"], "cat_bit_frac": [0.0], "whiten": [False]}
+    t = Tuner(grid=grid, n_folds=4, mode="two_class", random_state=0)
+    best = t.tune(X, y, feature_weighting="corr")
+    assert best["score"] < 0.57  # ไม่ inflate (leak เดิมดันเกินนี้ได้)
+
+
+def test_pu_background_split_fit_vs_eval(monkeypatch):
+    # audit P0: background ห้ามถูกใช้ทั้งสร้างตารางและเป็น negative proxy พร้อมกัน
+    from leadx.scoring import SeedScorer
+    seen_bg_sizes = []
+    orig_fit = SeedScorer.fit
+
+    def spy(self, codes, y, background_codes=None):
+        if background_codes is not None:
+            seen_bg_sizes.append(len(background_codes))
+        return orig_fit(self, codes, y, background_codes=background_codes)
+
+    monkeypatch.setattr(SeedScorer, "fit", spy)
+    rng = np.random.default_rng(1)
+    pos = (rng.standard_normal((150, 6)) + 2).astype(np.float32)
+    bg = rng.standard_normal((1000, 6)).astype(np.float32)
+    grid = {"n_bits": [6], "n_tables": [4], "m": [10.0], "weights": ["mean"],
+            "strategy": ["unsupervised"], "score_type": ["lift"], "alpha": [2.0],
+            "agg": ["log"], "cat_bit_frac": [0.0], "whiten": [False]}
+    Tuner(grid=grid, n_folds=3, mode="pu", random_state=0).tune(
+        pos, np.ones(150), Z_background=bg)
+    # ทุก scorer ตอน tune ต้องเห็น background แค่ครึ่ง fit (500) ไม่ใช่เต็มพัน
+    assert seen_bg_sizes and all(s == 500 for s in seen_bg_sizes)
+
+
+def test_supervised_geometry_cross_fitted_per_fold(monkeypatch):
+    # supervised bank ต้องถูก fit ต่อ fold (เห็นเฉพาะ y ของ train fold)
+    from leadx.projections import ProjectionBank
+    fit_sizes = []
+    orig_fit = ProjectionBank.fit
+
+    def spy(self, Z, y=None, cat_mask=None):
+        if self.strategy == "supervised":
+            fit_sizes.append(len(Z))
+        return orig_fit(self, Z, y=y, cat_mask=cat_mask)
+
+    monkeypatch.setattr(ProjectionBank, "fit", spy)
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((900, 8)).astype(np.float32)
+    y = (X[:, 0] > 0).astype(float)
+    grid = {"n_bits": [6], "n_tables": [4], "m": [10.0], "weights": ["mean"],
+            "strategy": ["supervised"], "score_type": ["prop"], "alpha": [2.0],
+            "agg": ["mean"], "cat_bit_frac": [0.0], "whiten": [False]}
+    Tuner(grid=grid, n_folds=3, mode="two_class", random_state=0).tune(X, y)
+    # 3 folds → 3 bank fits แต่ละครั้งบน train fold (~2/3 ของ 900) ไม่ใช่เต็ม 900
+    assert len(fit_sizes) == 3
+    assert all(590 <= s <= 610 for s in fit_sizes), fit_sizes

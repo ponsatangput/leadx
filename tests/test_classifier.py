@@ -314,3 +314,40 @@ def test_contrast_requires_pu_with_background():
     df, y = _blobs_df(n_per=30)
     with pytest.raises(ValueError, match="contrast"):
         LeadX(mode="two_class", feature_weighting="contrast").fit(df, y)
+
+
+def test_pu_parity_encoder_and_geometry_fit_on_background():
+    # audit P0: PU ที่มี background ต้อง fit encoder+projections จาก population
+    # (เดิม fit จาก seeds ไม่กี่ตัว → ไม่ตรง protocol benchmark และสถิติไม่เสถียร)
+    from leadx.encoder import FeatureEncoder
+    from leadx.projections import ProjectionBank
+    rng = np.random.default_rng(0)
+    bg = rng.standard_normal((3000, 6)) * 3 + 1.0   # population สถิติต่างจาก seeds ชัด
+    pos = rng.standard_normal((100, 6)) + 4.0
+    df_bg = pl.DataFrame({f"f{i}": bg[:, i] for i in range(6)})
+    df_pos = pl.DataFrame({f"f{i}": pos[:, i] for i in range(6)})
+    clf = LeadX(mode="pu", tune=False, n_bits=6, n_tables=3,
+                random_state=0).fit(df_pos, background=df_bg)
+    ref_enc = FeatureEncoder().fit(df_bg)
+    assert clf.encoder_.stats_["f0"]["mean"] == ref_enc.stats_["f0"]["mean"]
+    Z_bg = ref_enc.transform(df_bg)
+    ref_bank = ProjectionBank(n_tables=3, n_bits=6, random_state=0).fit(Z_bg)
+    np.testing.assert_array_equal(clf.hasher_.P, ref_bank.P_)
+    np.testing.assert_array_equal(clf.hasher_.thresholds, ref_bank.thresholds_)
+
+
+def test_tune_with_weighting_end_to_end_refits_final():
+    # path ใหม่: tune + weighting → tuner cross-fit → best_bank_=None → facade refit เต็ม
+    from sklearn.metrics import roc_auc_score
+    df, y = _blobs_df(n_per=150)
+    grid = {"n_bits": [6], "n_tables": [4], "m": [10.0], "weights": ["mean"],
+            "strategy": ["unsupervised"], "score_type": ["lift"], "alpha": [2.0],
+            "agg": ["log"], "cat_bit_frac": [0.0], "whiten": [False]}
+    clf = LeadX(mode="two_class", tune=True, grid=grid, feature_weighting="corr",
+                random_state=0).fit(df, y)
+    assert clf.feature_weights_ is not None          # weights เต็มถูกคำนวณหลัง tune
+    s = clf.score_samples(df)
+    assert roc_auc_score(y, s) > 0.9                 # โมเดล deploy ทำงานปกติ
+    # diagnostics โครงสร้างตรง hasher (refit path)
+    d = clf.diagnostics_["projections"]
+    assert len(d["tables"]) == clf.hasher_.n_tables

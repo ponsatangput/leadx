@@ -51,7 +51,7 @@ print(f"train {n_tr:,} (pos {int(ytr.sum()):,}) | test {len(yte):,} (pos rate {y
 
 # ---------- precompute: leadx codes (y-independent — ใช้ร่วมทุก draw) ----------
 CONFIGS = {"leadx_b12k15": (12, 15), "leadx_b10k40": (10, 40),
-           "leadx_b10k80": (10, 80)}
+           "leadx_b10k80": (10, 80), "leadx_b8k80": (8, 80)}
 CODES = {}
 for name, (b, k) in CONFIGS.items():
     t0 = time.perf_counter()

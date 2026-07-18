@@ -106,14 +106,14 @@ score เฉลี่ยข้าม table + m-estimate เป็น ranking mon
 
 B มาก = bucket ละเอียด (แม่นขึ้น) แต่ coverage ต่ำ (miss เยอะ) — สองตัวดึงกันคนละทาง optimal B ขึ้นกับ #seeds + signal → เป็น bias-variance ที่ต้องจูน per-task (ทำได้ถูกด้วย prefix-mask บน cached codes)
 
-## 5.1 Methodology caveats (จาก code review — จดไว้ ยังไม่แก้)
+## 5.1 Methodology caveats (จาก code review)
 
-1. **`feature_weighting` leak เข้า auto-tune** — weights คำนวณจาก y ทั้งชุดก่อนส่ง Z เข้า
-   Tuner → validation folds เห็น y ของตัวเองผ่าน weights → `tuning_results_` optimistic
-   เล็กน้อย (เกรดเดียวกับ supervised-bank ที่จดใน comment ของ tuning.py) — แก้จริงต้อง
-   cross-fit weights ต่อ fold (v2)
-2. **PU tuner: background ใช้ทั้ง fit และ eval** — `cbg` สร้างตาราง (denominator) และเป็น
-   negative proxy ตอนวัด AP พร้อมกัน → bias เล็ก มีผลเมื่อ background เล็ก
+1. ~~**`feature_weighting` leak เข้า auto-tune**~~ — **✅ แก้แล้ว (audit P0)**:
+   Tuner cross-fit weights + supervised geometry ต่อ fold — validation fold ไม่เห็น
+   y ตัวเองผ่าน geometry; weights เต็มคำนวณหลัง tune เฉพาะสำหรับ deploy
+   (regression: noise-data best score ~0.5, spy ยืนยัน bank fit ต่อ fold)
+2. ~~**PU tuner: background ใช้ทั้ง fit และ eval**~~ — **✅ แก้แล้ว (audit P0)**:
+   แบ่ง background เป็น fit/eval คนละครึ่ง; refit สุดท้ายใช้เต็มตามเดิม
 3. **coverage weights นับ `hit` จาก direct join ก่อน multi-probe** — table ที่ probe
    ช่วยกู้ได้เยอะถูกถ่วงเท่า table ที่ miss จริง — เป็น design choice (ค่า conservative)
 
@@ -350,24 +350,24 @@ whiten/contrast ชนะทั่วไป; whiten ต้องเป็น opt
 
 ### P0 — แก้ correctness / evaluation ก่อนทดลอง algorithm เพิ่ม
 
-- [ ] **แก้ Tuner ที่ตัด supervised candidates ทิ้ง:** เงื่อนไข dedupe ของ
+- [x] ✅ **แก้ Tuner ที่ตัด supervised candidates ทิ้ง:** เงื่อนไข dedupe ของ
   `cat_bit_frac` ตอนนี้บังคับ numeric/whiten ให้ใช้ค่าแรก แต่ supervised ให้ใช้ค่าสุดท้าย
   ทำให้ default grid ไม่เคยประเมิน supervised หรือ supervised+whiten. เพิ่ม regression test
   ที่ assert coverage ของ `(strategy, whiten)` ทุกชุดที่ขอ.
-- [ ] **ปิด OOF leakage:** fit supervised projections และ label-derived feature weights
+- [x] ✅ **ปิด OOF leakage:** fit supervised projections และ label-derived feature weights
   ภายใน train fold แล้ว transform validation fold; แยก background-fit กับ background-eval
   ใน PU tuner.
-- [ ] **ทำ benchmark ↔ production parity:** benchmark fit encoder/projections จาก population
+- [x] ✅ **ทำ benchmark ↔ production parity:** (PU: encoder+geometry fit จาก background) benchmark fit encoder/projections จาก population
   แต่ `LeadX.fit(X_positive, background=...)` fit encoder จาก positive seeds. ตัดสิน contract
   ให้ชัด (แนะนำ fit y-independent encoder/geometry จาก background population) แล้วให้ harness
   เรียก public API เดียวกับที่ deploy.
-- [ ] **แก้ documentation/API example:** contrast ต้องมี `background`; `n_tables=80` ถูก ignore
+- [x] ✅ **แก้ documentation/API example:** contrast ต้องมี `background`; `n_tables=80` ถูก ignore
   เมื่อ `tune=True` เพราะ default grid สูงสุด K=40. ตัวอย่างต้องใช้ `tune=False` หรือเพิ่ม K=80
   ใน grid อย่างตั้งใจ.
-- [ ] **ซ่อม reproducibility artifacts:** ตัวเลข exact-kNN gate ใน report ไม่ตรง raw/current
+- [x] ✅ (บางส่วน) **ซ่อม reproducibility artifacts:** (b8k80 เข้า CONFIGS, provenance note ใน report; combo/verify raw ยังเป็น spot-check ชั้นรอง) ตัวเลข exact-kNN gate ใน report ไม่ตรง raw/current
   script, `b8,K80` มีใน raw แต่ไม่มีใน `CONFIGS`, และผล combo/library verification ไม่มี raw
   artifact. ทุก claim ต้องมี script + raw rows + frozen config.
-- [ ] **method identity:** บันทึก `whiten_applied` แยกจากค่าที่ผู้ใช้ request; origin mode ที่
+- [x] ✅ **method identity:** (`whiten_applied_`) บันทึก `whiten_applied` แยกจากค่าที่ผู้ใช้ request; origin mode ที่
   ขอ whiten แต่ถูกข้ามห้าม serialize/รายงานเสมือนว่า whitening ทำงานจริง.
 
 ### P1 — improvement ราคาถูกที่ควรลองก่อนเปลี่ยน architecture
