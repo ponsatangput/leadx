@@ -234,3 +234,33 @@ def test_background_stats_cache_equivalence_and_reuse():
     bb.fit_task(seed_rows=rows, background="cached", mode="pu",
                 score_type="lift", agg="log")  # ไม่มี hier → คนละ key
     assert len(bb._bg_stats_cache) == 2
+
+
+def test_task_score_codes_reuses_transformed_batch_and_applies_prefix():
+    rng = np.random.default_rng(6)
+    X = rng.normal(size=(500, 7))
+    df = pl.DataFrame({f"f{i}": X[:, i] for i in range(7)})
+    y = (X[:, 0] - X[:, 1] > 1.0).astype(float)
+    bb = LeadXBackbone(n_bits=10, n_tables=7, random_state=0).fit(df[:350])
+    task = bb.fit_task(y[:350], mode="two_class", n_bits=8, n_tables=4,
+                       score_type="lift", agg="log")
+    codes = bb.transform(df[350:])
+    np.testing.assert_allclose(
+        task.score_codes(codes), task.score_samples(df[350:]), rtol=1e-12
+    )
+
+
+def test_task_score_codes_validates_shape_tables_and_dtype():
+    df, y = _blobs_df(n_per=50)
+    bb = LeadXBackbone(n_bits=6, n_tables=3, random_state=0).fit(df)
+    task = bb.fit_task(y)
+    with pytest.raises(ValueError, match="2 มิติ"):
+        task.score_codes(np.zeros(10, dtype=np.uint64))
+    with pytest.raises(ValueError, match="tables"):
+        task.score_codes(np.zeros((10, 2), dtype=np.uint64))
+    with pytest.raises(ValueError, match="integer"):
+        task.score_codes(np.zeros((10, 3), dtype=np.float64))
+    with pytest.raises(ValueError, match="ไม่ติดลบ"):
+        task.score_codes(-np.ones((10, 3), dtype=np.int64))
+    with pytest.raises(ValueError, match="เกินช่วง"):
+        task.score_codes(np.full((10, 3), 1 << bb.n_bits, dtype=np.uint64))

@@ -267,23 +267,49 @@ class TaskModel:
         codes = self.backbone.transform(df)
         return mask_codes(codes, self.n_bits, self.backbone.n_bits)[:, :self.n_tables]
 
-    def score_samples(self, df: pl.DataFrame) -> np.ndarray:
-        s = self.scorer_.score(self._codes(df))
-        self.diagnostics_ = self.scorer_.diagnostics_
-        if self.mode == "pu" and self.score_type != "lift":
-            s = normalize_pu(s, self._pu_lo, self._pu_span)
-        return s
-
-    def score_cached(self) -> np.ndarray:
-        """score rows ที่ fit backbone จาก cached codes ตรงๆ — ไม่ re-encode/re-hash
-        (path มาตรฐานของ 'จัดอันดับประชากรเดิมด้วยโจทย์ใหม่' — ถูกกว่า score_samples มาก)"""
-        codes = mask_codes(self.backbone._seed_codes, self.n_bits,
-                           self.backbone.n_bits)[:, :self.n_tables]
+    def _score_codes(self, codes: np.ndarray) -> np.ndarray:
         s = self.scorer_.score(codes)
         self.diagnostics_ = self.scorer_.diagnostics_
         if self.mode == "pu" and self.score_type != "lift":
             s = normalize_pu(s, self._pu_lo, self._pu_span)
         return s
+
+    def score_samples(self, df: pl.DataFrame) -> np.ndarray:
+        return self._score_codes(self._codes(df))
+
+    def score_codes(self, codes: np.ndarray) -> np.ndarray:
+        """Score codes จาก ``backbone.transform`` โดยไม่ encode/hash ซ้ำ
+
+        ใช้เมื่อมีหลาย task บน batch ใหม่เดียวกัน: เรียก ``bb.transform(X_new)``
+        ครั้งเดียว แล้วส่ง codes ชุดเดิมให้ทุก TaskModel.  ``codes`` ต้องมาจาก
+        backbone เดียวกันที่ full ``n_bits``/``n_tables``; method นี้จะทำ prefix
+        mask และ table subset ให้ตรง config ของ task เอง
+        """
+        codes = np.asarray(codes)
+        if codes.ndim != 2:
+            raise ValueError(f"codes ต้องเป็น matrix 2 มิติ (ได้ shape={codes.shape})")
+        if codes.shape[1] < self.n_tables:
+            raise ValueError(
+                f"codes มี {codes.shape[1]} tables < task ต้องการ {self.n_tables}"
+            )
+        if not np.issubdtype(codes.dtype, np.integer):
+            raise ValueError(f"codes ต้องเป็น integer dtype (ได้ {codes.dtype})")
+        if np.issubdtype(codes.dtype, np.signedinteger) and np.any(codes < 0):
+            raise ValueError("codes ต้องไม่ติดลบ")
+        if self.backbone.n_bits < 64 and np.any(codes >= (1 << self.backbone.n_bits)):
+            raise ValueError(
+                f"codes มีค่าเกินช่วง {self.backbone.n_bits}-bit ของ backbone"
+            )
+        task_codes = mask_codes(
+            codes.astype(np.uint64, copy=False), self.n_bits, self.backbone.n_bits
+        )[:, :self.n_tables]
+        return self._score_codes(task_codes)
+
+    def score_cached(self) -> np.ndarray:
+        """score rows ที่ fit backbone จาก cached codes ตรงๆ — ไม่ re-encode/re-hash
+        (path มาตรฐานของ 'จัดอันดับประชากรเดิมด้วยโจทย์ใหม่' — ถูกกว่า
+        score_samples มาก)"""
+        return self.score_codes(self.backbone._seed_codes)
 
     def predict_proba(self, df: pl.DataFrame) -> np.ndarray:
         if self.mode != "two_class":

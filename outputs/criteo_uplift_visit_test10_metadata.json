@@ -1,0 +1,138 @@
+{
+  "bagging_estimators": 30,
+  "bagging_unlabeled_size": 1000,
+  "baseline_models": [
+    "logreg_pu",
+    "bagging_logreg_pu",
+    "histgb_pu",
+    "histgb_oracle"
+  ],
+  "baseline_targets": [
+    "visit"
+  ],
+  "benchmark_script_sha256": "8129c1e1b4d9e14e06aca1cf3d63c0383d6adf7af60bda43dcfabfba1e41b576",
+  "command_argv": [
+    "outputs/criteo_uplift_benchmark.py",
+    "--targets",
+    "visit",
+    "--eval-split",
+    "test",
+    "--draws",
+    "10",
+    "--seed-budgets",
+    "20,100",
+    "--task-specific-targets",
+    "",
+    "--baseline-models",
+    "logreg_pu,bagging_logreg_pu,histgb_pu,histgb_oracle",
+    "--baseline-targets",
+    "visit",
+    "--output",
+    "outputs/criteo_uplift_visit_test10_raw.csv",
+    "--overwrite"
+  ],
+  "completed_unix": 1784385187.502868,
+  "created_unix": 1784385017.578353,
+  "data": "/Users/ponpiboonsatangput/jarvis/data/criteo-uplift/criteo-research-uplift-v2.1.csv.gz",
+  "draws": 10,
+  "elapsed_seconds": 169.92451906204224,
+  "estimand": "rare-outcome retrieval; not uplift/ITE",
+  "eval_split": "test",
+  "excluded_columns": [
+    "treatment",
+    "conversion",
+    "visit",
+    "exposure"
+  ],
+  "features": [
+    "f0",
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11"
+  ],
+  "frozen_engines": [
+    "hyperplane",
+    "rpforest"
+  ],
+  "git_revision": "d11cd03285a3f6ba200f0990f66510fbc0f216dd",
+  "leadx_worktree_dirty": true,
+  "n_bits": 10,
+  "n_eval": 200306,
+  "n_result_rows": 101,
+  "n_tables": 80,
+  "n_train": 599242,
+  "population": "all",
+  "population_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "population_rows": 13979592,
+  "runtime_versions": {
+    "numpy": "2.5.1",
+    "polars": "1.42.1",
+    "python": "3.12.12",
+    "scikit_learn": "1.9.0"
+  },
+  "sample_rates": {
+    "conversion": 0.002956,
+    "exposure": 0.030825,
+    "treatment": 0.849929,
+    "visit": 0.047233
+  },
+  "sample_rows": 1000000,
+  "sample_seed": 42,
+  "sampled": true,
+  "seed_budgets": [
+    20,
+    100
+  ],
+  "source_checksum_status": "matched_expected",
+  "source_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "source_rows": 13979592,
+  "source_sha256": "2716e1bf0fd157a93b5bf86924d9088419dfbac2022c6cd90030220634f616dc",
+  "split": {
+    "counts": {
+      "test": 200306,
+      "train": 599242,
+      "valid": 200452
+    },
+    "duplicate_row_fraction": 0.015545999999999949,
+    "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+    "split_seed": 2025,
+    "unique_feature_hashes": 984454
+  },
+  "split_rates": {
+    "test": {
+      "visit": 0.047447405469631464
+    },
+    "train": {
+      "visit": 0.04725469843569042
+    },
+    "valid": {
+      "visit": 0.046953884221659054
+    }
+  },
+  "targets": [
+    "visit"
+  ],
+  "task_specific_engines": [
+    "hyperplane",
+    "rpforest"
+  ],
+  "task_specific_targets": []
+}

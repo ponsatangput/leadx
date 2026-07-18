@@ -37,12 +37,12 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 
 | สถานการณ์ | ใช้ leadx? |
 |---|---|
-| **PU learning** — มีแต่ positive ยืนยันแล้ว + unlabeled ไม่มี labeled negative | ✅ **ใช่** — supervised training ตรงๆ ใช้ไม่ได้เมื่อไม่มี labeled negatives (ใช้ได้ผ่าน PU-naive conversion หรือ PU methods — เทียบใน IMBALANCE_FOCUS_REPORT) ส่วน leadx เป็น density ratio ที่เป็น PU โดยธรรมชาติ |
-| **หลายโจทย์บน feature space เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวัน) | ✅ **ใช่** — `LeadXBackbone` hash ครั้งเดียว แต่ละโจทย์ ~30ms (task-head construction เท่านั้น — scoring ประชากรคิดแยก) |
+| **PU learning** — มีแต่ positive ยืนยันแล้ว + unlabeled ไม่มี labeled negative | ⚠️ **พิจารณาตาม seed regime** — task-specific LeadX เด่นในบาง few-seed regimes แต่ linear/bagged PU แข็งแรงเมื่อ seeds มากขึ้น; ดู Criteo benchmark |
+| **หลายโจทย์บน feature space เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวัน) | ⚠️ **เหมาะเมื่อ task-head construction คือคอขวด** — `LeadXBackbone` hash ครั้งเดียว แต่ละโจทย์ ~30ms; scoring ยังคิดแยก และ frozen geometry ไม่ได้ชนะ accuracy อัตโนมัติ |
 | ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — scoring = bucket lookup บนตารางเล็ก (hyperplane: matmul → lookup; rpforest: traverse tree ~b ชั้นก่อน lookup) |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
 | **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
-| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **preliminary — เมื่อไม่มี labeled negatives (PU)**: บน rarity stress test (real features, downsample positives; split เดียว, 3 seed draws) config `rpforest+hier+contrast` ที่ 10% confirmed seeds ชนะ balanced HistGB PU-naive **5/7 regimes** — home-credit ทุก ratio ที่วัด (3%–0.3%), fraud 0.3% (1.6x) และ 0.1% (ชนะ 2/3 draws, variance สูง); **แพ้ fraud 3%/1%**; degrade นุ่มนวลสุด (ROC −0.04 เมื่อ positives หาย 30 เท่า vs PU-naive −0.19); เทียบ oracle label เต็มจูนแล้ว: 91-95% ที่ 3-1% และชนะที่ HC 0.3% เฉพาะ **allseeds setting, split เดียว** (ที่ 10% seeds ยังแพ้); ยังไม่เทียบ strong PU methods จาก literature (outputs/IMBALANCE_FOCUS_REPORT.md) |
+| **imbalanced สุดโต่ง** (positive < ~0.3%) | ⚠️ **preliminary — few confirmed seeds สำคัญกว่า prevalence อย่างเดียว**: Criteo conversion (observed 0.292%) ที่ 20 seeds, task-specific RPForest ชนะ linear-PU envelope +20.4% paired PR (8/10); ที่ 100 seeds เหลือ +1.7% และไม่ชัด. Rarity stress test เดิมชนะ PU-naive 5/7 regimes; frozen reuse ยังไม่ใช่ accuracy moat |
 | **imbalanced ปานกลาง** (1–10%) ที่มี labeled negatives | ❌ **ไม่** — boosting ยังชนะ (PR-AUC สูงกว่า) |
 
 รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
@@ -232,7 +232,9 @@ fraud = bb.fit_task(y_fraud)
 leads = bb.fit_task(mode="pu", seed_rows=pos_indices, background="cached",
                     score_type="lift", agg="log", hier_depths="auto")
 ranking = leads.score_cached()                  # จัดอันดับประชากรจาก cached codes
-churn.predict_proba(X_new)                      # rows ใหม่ re-hash ผ่าน projections ร่วม
+new_codes = bb.transform(X_new)                 # batch ใหม่ hash ครั้งเดียว
+churn_score = churn.score_codes(new_codes)      # reuse codes เดิมข้าม task
+fraud_score = fraud.score_codes(new_codes)
 bb.save(path); LeadXBackbone.load(path)         # แชร์ projections ข้ามทีม/เวลา
 ```
 
@@ -322,6 +324,7 @@ LeadXBackbone(n_bits=16, n_tables=15, hash_mode="median", cat_bit_frac="auto",
 |---|---|
 | `.predict_proba(df) → (n, 2)` | two_class เท่านั้น |
 | `.score_samples(df) → (n,)` | ทั้งสอง mode (re-hash df ผ่าน projections ร่วม) |
+| `.score_codes(codes) → (n,)` | score codes จาก `backbone.transform(df)` — batch ใหม่ hash ครั้งเดียวแล้ว reuse ข้ามหลาย task; task ทำ prefix mask/table subset ให้เอง |
 | `.score_cached() → (n,)` | จัดอันดับ *ประชากรที่ fit backbone* จาก cached codes — ไม่ re-encode/re-hash (path มาตรฐานของ "โจทย์ใหม่บนประชากรเดิม") |
 | `.backbone` | reference ไป backbone ที่แชร์ projections |
 
@@ -356,6 +359,16 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 สูสีบน dataset ที่แยกได้ดี ตามหลัง tree-based 2–6 points บนข้อมูล signal กระจาย/boundary โค้ง
 
 ### สถานะปัจจุบันบนข้อมูลจริง — โจทย์ธง PU + imbalance (2026-07-18)
+
+**External check — Criteo Uplift v2.1:** observed conversion rate 0.292%,
+1M-row feature-group split, test groups, 10 paired seed draws. ที่ 20 confirmed
+seeds, task-specific `contrast+rpforest` ได้ PR-AUC median .153 เทียบ Bagged-LogReg
+.128 / LogReg .124; paired กับตัวที่ดีกว่าในแต่ละ draw = **+20.4%**, ชนะ 8/10.
+ที่ 100 seeds edge เหลือ +1.7% และ interval คร่อมศูนย์. Frozen backbone สูสีกับ
+linear PU ที่ conversion/20 seeds แต่แพ้ที่ 100 seeds และแพ้บน secondary `visit`;
+task head ~0.03s แต่ end-to-end ไม่เร็วกว่า linear models บน 12 features.
+รายละเอียด protocol, caveats, raw และ full 13.98M scale replication ดู
+`outputs/CRITEO_UPLIFT_REPORT.md`.
 
 เส้นทางตัวเลขธง **home-credit PU, seeds 10% ของ positives (~2,000), PR-AUC**
 (ทุกตัวเลขภายใต้ parity contract — ไม่มี leakage):

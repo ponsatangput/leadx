@@ -1,0 +1,101 @@
+{
+  "bagging_estimators": 30,
+  "bagging_unlabeled_size": 1000,
+  "baseline_models": [
+    "bagging_logreg_pu"
+  ],
+  "baseline_targets": [
+    "conversion"
+  ],
+  "completed_unix": 1784381677.171316,
+  "created_unix": 1784381669.403489,
+  "data": "/Users/ponpiboonsatangput/jarvis/data/criteo-uplift/criteo-research-uplift-v2.1.csv.gz",
+  "draws": 10,
+  "elapsed_seconds": 7.767827987670898,
+  "estimand": "rare-outcome retrieval; not uplift/ITE",
+  "eval_split": "valid",
+  "excluded_columns": [
+    "treatment",
+    "conversion",
+    "visit",
+    "exposure"
+  ],
+  "features": [
+    "f0",
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11"
+  ],
+  "frozen_engines": [],
+  "n_bits": 10,
+  "n_eval": 200452,
+  "n_result_rows": 20,
+  "n_tables": 80,
+  "n_train": 599242,
+  "population": "all",
+  "population_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "population_rows": 13979592,
+  "sample_rates": {
+    "conversion": 0.002956,
+    "exposure": 0.030825,
+    "treatment": 0.849929,
+    "visit": 0.047233
+  },
+  "sample_rows": 1000000,
+  "sample_seed": 42,
+  "sampled": true,
+  "seed_budgets": [
+    20,
+    100
+  ],
+  "source_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "source_rows": 13979592,
+  "source_sha256": "2716e1bf0fd157a93b5bf86924d9088419dfbac2022c6cd90030220634f616dc",
+  "split": {
+    "counts": {
+      "test": 200306,
+      "train": 599242,
+      "valid": 200452
+    },
+    "duplicate_row_fraction": 0.015545999999999949,
+    "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+    "split_seed": 2025,
+    "unique_feature_hashes": 984454
+  },
+  "split_rates": {
+    "test": {
+      "conversion": 0.0029654628418519665
+    },
+    "train": {
+      "conversion": 0.002937043798665648
+    },
+    "valid": {
+      "conversion": 0.0030032127392093867
+    }
+  },
+  "targets": [
+    "conversion"
+  ],
+  "task_specific_engines": [],
+  "task_specific_targets": [
+    "conversion"
+  ]
+}
