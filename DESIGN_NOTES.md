@@ -326,6 +326,7 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | audit P0: OOF leakage / benchmark↔production parity | cross-fit ต่อ fold, PU bg split, encoder fit จาก background | ตัวเลขรายงานเชื่อได้ (noise-leak bound test) |
 | variance ที่ seeds น้อยมาก (โซนธง imbalance) | `hier_depths` — EB shrink เข้าหา bucket แม่ข้าม prefix depths | +41% fraud 0.3%, +15% fraud 0.1% (§8d) |
 | scalability ที่ 10M แถว (โจทย์ตั้งต้น) | encoder preallocate f32 + `BackgroundStats` cache + `seed_rows`/`score_cached` | backbone 351s→51s; โจทย์ 2+ = 0.04s (§8e) |
+| mega-bucket ในย่านหนาแน่น (สมมติฐานเจ้าของ ต้นโปรเจกต์) | `engine="rpforest"` — rpTree: ทิศ+median ท้องถิ่นต่อ node = equal-mass | fraud 0.3% +39%, HC 0.3% +42%, natural +6% (new best); occupancy 6.3%→0.098% (§8f) |
 
 **Top-3 การปรับที่มีค่าที่สุด:** (1) lift scoring — เปลี่ยน positioning ด้วยคณิตศาสตร์
 (2) type-aware bits — อุดรูรั่ว categorical (3) median/tie-aware hashing — ลบโค้ด
@@ -414,6 +415,33 @@ score ประชากร 10M = 31s; peak RSS 12.2GB; ROC ไม่เสื�
 **บทเรียน:** benchmark ที่ 300k มองไม่เห็นทั้งสองตัว — super-linear โผล่เมื่อชน
 memory ceiling และ "จ่ายซ้ำ" เจ็บจริงเมื่อของที่จ่ายซ้ำโต 30 เท่า
 
+## 8f. RPForest — Balanced Local Projection Forest shipped (2026-07-18)
+
+P2 ตัวแรกที่ลงมือ (ตามการตัดสินใจของเจ้าของ) — และ **สมมติฐาน mega-bucket จาก
+ต้นโปรเจกต์ได้รับการยืนยันบนข้อมูลจริง**: bank เดิมบน fraud มี bucket เดียวกิน
+6.3% ของประชากร (p99 = 2,509 แถว) ขณะที่ rpTree แคปที่ 0.098% (p99 = 199)
+โดยโครงสร้าง — ทิศสุ่มใหม่ + median ท้องถิ่นต่อ node = equal-mass partition
+
+ผลวัด (PU b10 K80 + contrast + hier, median 3 draws, gate ตั้งก่อนเห็นผล):
+
+| cell | bank+hier | rpf+hier | Δ rel |
+|---|---|---|---|
+| fraud 0.3% | .0331 | **.0461** | **+39%** |
+| home-credit 0.3% | .0047 | **.0066** | **+42%** |
+| home-credit 1% | .0226 | **.0245** | +8% |
+| fraud 0.1% | .0099 | .0097 | −1.6% (เสมอ — 20 seeds, signal-limited) |
+| **natural 8%** | .1964 | **.2081** | **+6% — new best home-credit PU** |
+
+**Gate ผ่าน** (3/4 extreme + natural ไม่ regress — ชนะด้วยซ้ำ) → ship เป็น
+`engine="rpforest"` (opt-in) บน LeadX + Backbone: leaf code มี MSB prefix =
+tree path → SeedScorer/hier/mask_codes/BackgroundStats ใช้ร่วมได้ทั้งชุดไม่แก้อะไร
+
+Trade-offs ที่จดไว้: fit+transform ~2-4.5x ของ single-matmul; model size
+K×(2^b−1)×D f32 (~51MB ที่ K80 b10 D155 vs ~500KB ของ bank); ยังไม่รองรับ
+tune=True (tuner ทำ prefix masking บน bank); cat_bit_frac/whiten ไม่มีผลใน
+engine นี้; hier บน forest ช่วย HC แต่ neutral-ลบเล็กบน fraud 0.3% (flat .055
+vs hier .046 — จดไว้ยังไม่สรุป) — prototype/raw: outputs/rpforest_experiment.py
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
@@ -474,9 +502,8 @@ whiten/contrast ชนะทั่วไป; whiten ต้องเป็น opt
 
 ### P2 — งานวิจัย architecture (ทำเมื่อ P0/P1 ผ่านเท่านั้น)
 
-- [ ] **Balanced Local Projection Forest:** recursive node-local direction + local median,
-  หลาย trees, hierarchical shrinkage. ต้องเป็น local recursion จริง ไม่ใช่ global
-  pair-difference directions/adaptive-prefix scoring ที่เคยแพ้.
+- [x] ✅ **Balanced Local Projection Forest:** วัดแล้ว **ผ่าน gate — shipped**
+  เป็น `engine="rpforest"` (ดู §8f; mega-bucket hypothesis ยืนยันบนข้อมูลจริง)
 - [ ] **Faithful ITQ / Anchor Graph Hashing:** prototype ปัจจุบันไม่ใช่ implementation ตาม
   paper เต็ม (AGH ไม่มี graph eigensystem; ITQ ถูกบีบ PCA-10 + median). ผลลบปัจจุบันปฏิเสธ
   ได้เฉพาะ prototype ไม่ใช่ algorithm family.

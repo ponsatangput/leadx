@@ -18,6 +18,7 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, infer_hash_mode, mask_codes
 from .projections import ProjectionBank
+from .rpforest import RPForest
 from .scoring import (BackgroundStats, SeedScorer, normalize_pu,
                       pu_score_range, resolve_hier_depths)
 
@@ -47,8 +48,11 @@ class LeadXBackbone:
     """
 
     def __init__(self, n_bits=16, n_tables=15, hash_mode="median",
-                 cat_bit_frac="auto", whiten=False, random_state=0,
-                 chunk_size=1_000_000):
+                 cat_bit_frac="auto", whiten=False, engine="hyperplane",
+                 random_state=0, chunk_size=1_000_000):
+        if engine not in ("hyperplane", "rpforest"):
+            raise ValueError(f"engine ไม่รู้จัก: {engine}")
+        self.engine = engine
         self.n_bits = n_bits
         self.n_tables = n_tables
         self.hash_mode = hash_mode
@@ -80,13 +84,18 @@ class LeadXBackbone:
             Z = Z * self.feature_weights_
         else:
             self.feature_weights_ = None
-        bank = ProjectionBank(
-            n_tables=self.n_tables, n_bits=self.n_bits, strategy="unsupervised",
-            hash_mode=self.hash_mode, cat_bit_frac=self.cat_bit_frac,
-            whiten=self.whiten, random_state=self.random_state,
-        ).fit(Z, cat_mask=self.encoder_.cat_mask_)
-        self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
-        self.diagnostics_ = bank.diagnostics()
+        if self.engine == "rpforest":
+            self.hasher_ = RPForest(n_tables=self.n_tables, n_bits=self.n_bits,
+                                    random_state=self.random_state).fit(Z)
+            self.diagnostics_ = {"engine": "rpforest"}
+        else:
+            bank = ProjectionBank(
+                n_tables=self.n_tables, n_bits=self.n_bits, strategy="unsupervised",
+                hash_mode=self.hash_mode, cat_bit_frac=self.cat_bit_frac,
+                whiten=self.whiten, random_state=self.random_state,
+            ).fit(Z, cat_mask=self.encoder_.cat_mask_)
+            self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
+            self.diagnostics_ = bank.diagnostics()
         self._seed_codes = self.hasher_.transform(Z, chunk_size=self.chunk_size)
         self._bg_stats_cache = {}
         return self
@@ -192,15 +201,20 @@ class LeadXBackbone:
     def save(self, path) -> None:
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        np.save(path / "projections.npy", self.hasher_.P)
-        np.save(path / "thresholds.npy", self.hasher_.thresholds)
+        if isinstance(self.hasher_, RPForest):
+            arrs = self.hasher_.to_arrays()
+            np.save(path / "rpf_dirs.npy", arrs["dirs"])
+            np.save(path / "rpf_thr.npy", arrs["thr"])
+        else:
+            np.save(path / "projections.npy", self.hasher_.P)
+            np.save(path / "thresholds.npy", self.hasher_.thresholds)
         np.save(path / "seed_codes.npy", self._seed_codes)
         if self.feature_weights_ is not None:
             np.save(path / "feature_weights.npy", self.feature_weights_)
         meta = {
             "n_bits": self.n_bits, "n_tables": self.n_tables,
             "hash_mode": self.hash_mode, "cat_bit_frac": self.cat_bit_frac,
-            "whiten": self.whiten,
+            "whiten": self.whiten, "engine": self.engine,
             "random_state": self.random_state, "chunk_size": self.chunk_size,
             "encoder": self.encoder_.to_dict(), "polars_version": pl.__version__,
         }
@@ -212,14 +226,20 @@ class LeadXBackbone:
         meta = json.loads((path / "meta.json").read_text())
         thr_file = path / "thresholds.npy"
         thresholds = np.load(thr_file) if thr_file.exists() else None
+        engine = meta.get("engine", "hyperplane")
         bb = cls(n_bits=meta["n_bits"], n_tables=meta["n_tables"],
                  hash_mode=infer_hash_mode(meta.get("hash_mode"), thresholds),
                  cat_bit_frac=meta.get("cat_bit_frac", "auto"),
-                 whiten=meta.get("whiten", False),
+                 whiten=meta.get("whiten", False), engine=engine,
                  random_state=meta["random_state"], chunk_size=meta["chunk_size"])
         bb.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
-        bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
+        if engine == "rpforest":
+            bb.hasher_ = RPForest.from_arrays(np.load(path / "rpf_dirs.npy"),
+                                              np.load(path / "rpf_thr.npy"))
+        else:
+            bb.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         bb._seed_codes = np.load(path / "seed_codes.npy")
+        bb._bg_stats_cache = {}
         fw_file = path / "feature_weights.npy"
         bb.feature_weights_ = np.load(fw_file) if fw_file.exists() else None
         bb.diagnostics_ = {"note": "loaded — projection diagnostics ไม่ถูกบันทึก"}

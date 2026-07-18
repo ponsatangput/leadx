@@ -12,6 +12,7 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, infer_hash_mode
 from .projections import ProjectionBank, projection_diagnostics
+from .rpforest import RPForest
 from .scoring import SeedScorer, normalize_pu, pu_score_range, resolve_hier_depths
 from .tuning import Tuner
 
@@ -62,6 +63,12 @@ class LeadX:
         สัดส่วน bits ที่ project เฉพาะ categorical blocks (แก้ hyperplane bits มองไม่
         เห็น one-hot); "auto" = ตามสัดส่วนมิติ; อยู่ใน tuner grid — tuner เลือก 0
         เองเมื่อ categorical เป็น noise
+    engine : {"hyperplane", "rpforest"}
+        "hyperplane" — global random hyperplanes + median (default, single-matmul,
+        รองรับ tune); "rpforest" — balanced rpTree forest: ทิศสุ่มต่อ node + median
+        ท้องถิ่น → bucket ขนาดเท่ากันโดยโครงสร้าง (ฆ่า mega-bucket — วัดจริง PU:
+        fraud 0.3% +39%, home-credit natural +6% เทียบ hyperplane+hier; fit แพง
+        กว่า ~2-4x, ยังไม่รองรับ tune=True)
     hier_depths : None | "auto" | sequence[int]
         hierarchical shrinkage ข้าม prefix depths (score_type="lift" เท่านั้น):
         "auto" = (4, 6, ..., n_bits) — bucket ลึกที่หลักฐานบาง inherit lift ของ
@@ -92,9 +99,17 @@ class LeadX:
                  strategy="unsupervised", weights="mean", grid=None,
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
                  hash_mode="median", cat_bit_frac="auto", whiten=False,
-                 hier_depths=None, chunk_size=1_000_000, random_state=0):
+                 hier_depths=None, engine="hyperplane",
+                 chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
+        if engine not in ("hyperplane", "rpforest"):
+            raise ValueError(f"engine ไม่รู้จัก: {engine}")
+        if engine == "rpforest" and tune:
+            raise ValueError(
+                "engine='rpforest' ยังไม่รองรับ tune=True (tuner ทำ prefix masking "
+                "บน bank) — ใช้ tune=False กับ n_bits/n_tables ที่ต้องการ"
+            )
         if feature_weighting not in ("none", "corr", "contrast"):
             raise ValueError(f"feature_weighting ไม่รู้จัก: {feature_weighting}")
         self.mode = mode
@@ -113,6 +128,7 @@ class LeadX:
         self.cat_bit_frac = cat_bit_frac
         self.whiten = whiten
         self.hier_depths = hier_depths
+        self.engine = engine
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -210,6 +226,14 @@ class LeadX:
                 self.hasher_ = HashEnsemble(P, thr)
                 # diagnostics ต้องสะท้อน prefix ที่ deploy จริง ไม่ใช่ bank เต็มของ tuner
                 proj_diag = projection_diagnostics(P, thr, Z, strategy=cfg["strategy"])
+        elif self.engine == "rpforest":
+            # local recursion: ทิศ+threshold ต่อ node → equal-mass buckets; leaf
+            # codes มี prefix structure เดียวกับ bank → scorer/hier ใช้ร่วมได้หมด
+            self.hasher_ = RPForest(
+                n_tables=cfg["n_tables"], n_bits=cfg["n_bits"],
+                random_state=self.random_state,
+            ).fit(Z_geom)
+            proj_diag = {"engine": "rpforest"}
         else:
             bank = ProjectionBank(
                 n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
@@ -332,8 +356,13 @@ class LeadX:
         """
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        np.save(path / "projections.npy", self.hasher_.P)
-        np.save(path / "thresholds.npy", self.hasher_.thresholds)
+        if isinstance(self.hasher_, RPForest):
+            arrs = self.hasher_.to_arrays()
+            np.save(path / "rpf_dirs.npy", arrs["dirs"])
+            np.save(path / "rpf_thr.npy", arrs["thr"])
+        else:
+            np.save(path / "projections.npy", self.hasher_.P)
+            np.save(path / "thresholds.npy", self.hasher_.thresholds)
         tables = pl.concat([
             t.with_columns(table=pl.lit(k).cast(pl.Int32))
             for k, t in enumerate(self.scorer_.tables_)
@@ -365,6 +394,7 @@ class LeadX:
             "pi": self._pi,
             "feature_weights": None if self.feature_weights_ is None
             else self.feature_weights_.tolist(),
+            "engine": self.engine,
             "hier_depths": None if hier is None else list(hier),
             "hier_pos_total": getattr(self.scorer_, "hier_pos_total_", None),
             "hier_ref_total": getattr(self.scorer_, "hier_ref_total_", None),
@@ -381,6 +411,7 @@ class LeadX:
         cfg.setdefault("alpha", 2.0)
         cfg.setdefault("agg", "mean")
         cfg.setdefault("cat_bit_frac", "auto")
+        engine = meta.get("engine", "hyperplane")
         thr_file = path / "thresholds.npy"
         thresholds = np.load(thr_file) if thr_file.exists() else None
         clf = cls(
@@ -392,6 +423,7 @@ class LeadX:
             whiten=meta.get("whiten", False),
             cat_bit_frac=cfg["cat_bit_frac"],
             hier_depths=meta.get("hier_depths"),
+            engine=engine,
             chunk_size=meta["chunk_size"],
         )
         clf._pi = meta.get("pi")
@@ -404,7 +436,11 @@ class LeadX:
         fw = meta.get("feature_weights")
         clf.feature_weights_ = None if fw is None else np.asarray(fw, dtype=np.float32)
         clf.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
-        clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
+        if engine == "rpforest":
+            clf.hasher_ = RPForest.from_arrays(np.load(path / "rpf_dirs.npy"),
+                                               np.load(path / "rpf_thr.npy"))
+        else:
+            clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         hier = meta.get("hier_depths")
         scorer = SeedScorer(
             mode=meta["mode"], m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
