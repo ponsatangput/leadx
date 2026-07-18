@@ -421,7 +421,8 @@ outputs/hier_shrinkage_experiment.py (raw CSV)
 ตั้งต้นของโจทย์ (10M แถว × 100 features) — ตัวเลขเต็ม: outputs/SCALE_VALIDATION_REPORT.md
 
 **ผล (10M แถว, 24GB laptop):** backbone 51s ครั้งเดียว → โจทย์ PU ถัดไป **0.04s**
-(vs HistGB ~115s/โจทย์ + ต้อง label เต็ม → 20 โจทย์เร็วกว่า ~30x, marginal ~3,000x);
+(vs HistGB ~115s/โจทย์ + ต้อง label เต็ม — เทียบ **fit-vs-fit เท่านั้น**: 20 โจทย์
+~30x; **end-to-end รวม scoring ประชากร ~31s/โจทย์ → ~4x** — ดู breakdown ใน report);
 score ประชากร 10M = 31s; peak RSS 12.2GB; ROC ไม่เสื่อมตาม scale (ดีขึ้น:
 0.873→0.924 — background ใหญ่ = denominator นิ่ง)
 
