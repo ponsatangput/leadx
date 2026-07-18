@@ -217,12 +217,16 @@ bb = LeadXBackbone(n_bits=16, n_tables=15, random_state=0).fit(X)   # แพง�
 # โจทย์ที่ signal คนละชุดจะแย่ลง — y_ref ต้อง represent กลุ่มโจทย์จริง)
 churn = bb.fit_task(y_churn)                    # ~30ms — คืน TaskModel
 fraud = bb.fit_task(y_fraud)
-leads = bb.fit_task(mode="pu", seeds=X_pos, background=X)
-churn.predict_proba(X_new)                      # re-hash rows ใหม่ผ่าน projections ร่วม
+# PU บนประชากรเดียวกับที่ fit: seed_rows + background="cached" — ไม่ re-hash เลย
+# (สถิติ background ถูก memoize — โจทย์ที่สองเป็นต้นไป ~40ms แม้ที่ 10M แถว)
+leads = bb.fit_task(mode="pu", seed_rows=pos_indices, background="cached",
+                    score_type="lift", agg="log", hier_depths="auto")
+ranking = leads.score_cached()                  # จัดอันดับประชากรจาก cached codes
+churn.predict_proba(X_new)                      # rows ใหม่ re-hash ผ่าน projections ร่วม
 bb.save(path); LeadXBackbone.load(path)         # แชร์ projections ข้ามทีม/เวลา
 ```
 
-per-task ปรับ granularity ได้ถูกๆ: `fit_task(y, n_bits=b, n_tables=k)` โดย `b ≤` backbone (prefix mask) และ `k ≤` backbone (subset) — ไม่ต้อง re-hash
+per-task ปรับ granularity ได้ถูกๆ: `fit_task(y, n_bits=b, n_tables=k)` โดย `b ≤` backbone (prefix mask) และ `k ≤` backbone (subset) — ไม่ต้อง re-hash (วัดจริงที่ 10M แถว: backbone 51s ครั้งเดียว → โจทย์ถัดไป 0.04s — ดู outputs/SCALE_VALIDATION_REPORT.md)
 
 **ข้อแลก:** backbone ใช้ unsupervised projections เท่านั้น → ใช้ `feature_weighting` ไม่ได้ (weights ใช้ y → codes task-specific → ปิด reuse) เลือกอย่างใดอย่างหนึ่งตาม use case
 
@@ -292,7 +296,7 @@ LeadXBackbone(n_bits=16, n_tables=15, hash_mode="median", cat_bit_frac="auto",
 | method / attr | คำอธิบาย |
 |---|---|
 | `.fit(df, y_ref=None)` | encode + unsupervised projections + cache seed codes; `y_ref` = shared feature weights จากโจทย์อ้างอิง |
-| `.fit_task(y=None, mode="two_class", m=10.0, weights="mean", n_bits=None, n_tables=None, seeds=None, background=None, score_type="prop", alpha=2.0, agg="mean") → TaskModel` | สร้างโมเดลต่อโจทย์จาก cached codes (ถูกมาก) |
+| `.fit_task(y=None, mode="two_class", m=10.0, weights="mean", n_bits=None, n_tables=None, seeds=None, seed_rows=None, background=None, score_type="prop", alpha=2.0, agg="mean", hier_depths=None) → TaskModel` | สร้างโมเดลต่อโจทย์จาก cached codes; `seed_rows` = indices เข้า cached codes (ไม่ re-hash), `background="cached"` = ใช้ประชากรที่ fit เป็น background ผ่าน stats cache (โจทย์ 2+ = ~40ms ที่ 10M แถว) |
 | `.transform(df) → (n, n_tables) uint64` | hash rows ใหม่ผ่าน projections เดิม |
 | `.save(path)` / `LeadXBackbone.load(path)` | serialize / deserialize |
 | `.diagnostics_` | projection quality |
@@ -303,7 +307,8 @@ LeadXBackbone(n_bits=16, n_tables=15, hash_mode="median", cat_bit_frac="auto",
 | method / attr | คำอธิบาย |
 |---|---|
 | `.predict_proba(df) → (n, 2)` | two_class เท่านั้น |
-| `.score_samples(df) → (n,)` | ทั้งสอง mode |
+| `.score_samples(df) → (n,)` | ทั้งสอง mode (re-hash df ผ่าน projections ร่วม) |
+| `.score_cached() → (n,)` | จัดอันดับ *ประชากรที่ fit backbone* จาก cached codes — ไม่ re-encode/re-hash (path มาตรฐานของ "โจทย์ใหม่บนประชากรเดิม") |
 | `.backbone` | reference ไป backbone ที่แชร์ projections |
 
 ---
