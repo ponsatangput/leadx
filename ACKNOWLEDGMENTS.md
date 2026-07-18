@@ -1,6 +1,6 @@
 # Acknowledgments
 
-- The first version of this algorithm was built around 2022 at Siam
+- The first version of this algorithm was built in 2021 at Siam
   Commercial Bank (SCB), with the help of an intern.
   <!-- TODO(owner): ใส่ชื่อ intern หลังได้รับความยินยอม -->
 - The 2026 rewrite was built in collaboration with Claude (Anthropic), with
