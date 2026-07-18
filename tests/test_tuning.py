@@ -132,3 +132,20 @@ def test_default_grid_includes_deep_tables():
     # Phase-1 locality headroom: K=40 ให้ +15-24% rel PR-AUC บน PU จริง (home-credit)
     from leadx.tuning import DEFAULT_GRID
     assert 40 in DEFAULT_GRID["n_tables"]
+
+
+def test_tuner_covers_all_strategy_whiten_combos():
+    # regression (external audit P0): dedupe เดิมตัด supervised ทิ้งบน numeric-only
+    # และ supervised+whiten หายทุกกรณี — ทุก (strategy, whiten) ที่ขอต้องถูกประเมิน
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((2000, 10)).astype(np.float32)
+    y = (X[:, 0] > 0).astype(float)  # seeds เพียงพอ ไม่ trigger supervised fallback
+    grid = {"n_bits": [6], "n_tables": [4], "m": [10.0], "weights": ["mean"],
+            "strategy": ["unsupervised", "supervised"], "score_type": ["prop"],
+            "alpha": [2.0], "agg": ["mean"], "cat_bit_frac": [0.0, "auto"],
+            "whiten": [False, True]}
+    t = Tuner(grid=grid, n_folds=3, mode="two_class", random_state=0)
+    t.tune(X, y)
+    combos = set(zip(t.results_["strategy"].to_list(), t.results_["whiten"].to_list()))
+    assert combos == {("unsupervised", False), ("unsupervised", True),
+                      ("supervised", False), ("supervised", True)}

@@ -95,17 +95,17 @@ class Tuner:
         rows, banks = [], {}
         for strategy in self.grid["strategy"]:
           for wh in self.grid["whiten"]:
-            for frac in fracs:
-                # dedupe: whiten ผสมทุกมิติ → cat_bit_frac ไม่มีผลเมื่อ whiten=True
-                if wh and frac != fracs[0]:
-                    continue
-                # dedupe frac: ไม่มี cat columns → frac ไม่มีผล ประเมินค่าแรกค่าเดียว;
-                # supervised จัดสรรชนิด bits ด้วย IG เอง → ประเมินครั้งเดียว (ค่าสุดท้าย
-                # ซึ่งเปิด typed candidate pool ถ้ามี cat)
-                if not has_cat and frac != fracs[0]:
-                    continue
-                if strategy == "supervised" and frac != fracs[-1]:
-                    continue
+            # dedupe cat_bit_frac ต่อ (strategy, whiten): เลือก "ชุด fracs ที่ต้องประเมิน"
+            # เป็นก้อนเดียว — เดิมใช้เงื่อนไข skip อิสระสามข้อที่ขัดกันเอง ทำให้
+            # supervised ไม่เคยถูกประเมินบนข้อมูล numeric-only และ supervised+whiten
+            # หายไปทุกกรณี (พบโดย external audit — DESIGN_NOTES §8 P0)
+            if not has_cat or wh:
+                fracs_eval = [fracs[0]]        # frac ไม่มีผล (ไม่มี cat / whiten ผสมทุกมิติ)
+            elif strategy == "supervised":
+                fracs_eval = [fracs[-1]]       # supervised จัดสรรชนิด bits ผ่าน IG pool เอง
+            else:
+                fracs_eval = fracs
+            for frac in fracs_eval:
                 frac_val = frac if frac == "auto" else float(frac)
                 # bank ต่อ (strategy, frac): frac เปลี่ยน projections → ต้อง re-hash
                 # (median mode fit เร็วพอที่จะจ่ายได้; ต่างจาก bits/tables ที่ mask ได้)
