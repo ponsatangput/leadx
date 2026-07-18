@@ -276,6 +276,24 @@ geometric mean = "table ไม่มีหลักฐานก็ไม่โ�
 ไม่ช่วยทุก dataset (แย่ลง 0.005–0.014) — encoder standardize ทำ variance เท่ากันทุกแกน
 แล้ว ทิศ gaussian จึงเหมาะสมอยู่แล้ว (บนข้อมูลดิบคงช่วย แต่ pipeline ไม่เจอข้อมูลดิบ)
 
+**Margin-aware multi-probe** (fallback flip เฉพาะ T bits ที่ |z−threshold| แคบสุด
+แทน flip ทุก bit — ข้อเสนอ audit P1-4; 3 draws, K=40):
+
+| regime | miss rate | none | all (ปัจจุบัน) | m2 | m4 | m4+pair |
+|---|---|---|---|---|---|---|
+| home-credit PU b10 (deploy) | 0.0% | 0.2005 | 0.2005 | 0.2005 | 0.2005 | 0.2005 |
+| home-credit PU b20 | 17% | 0.1894 | 0.1893 | 0.1896 | 0.1896 | 0.1896 |
+| adult 2c 30seeds b14 | 82% | 0.721 | **0.757** | 0.741 | 0.747 | 0.751 |
+| adult 2c 30seeds b20 | 88% | 0.661 | **0.727** | 0.694 | 0.710 | 0.715 |
+
+**ผล: ปฏิเสธ** — สมมติฐานผิดทั้งสอง regime: (1) config ที่ deploy จริง (bits ต่ำจาก
+tables scaling) miss≈0 → probe ไม่เคยทำงาน (2) โซน miss สูง ตัวจำกัดคือ *recall*
+(หา bucket ที่มี seeds ให้เจอสักอัน — neighbors ส่วนใหญ่ก็ว่าง) ไม่ใช่ *precision*
+(เลือก neighbor คล้ายสุด) → probe 20 ทิศชนะ probe 4 ทิศฉลาดๆ monotone ตาม T
+และ argument ประหยัด cost ไม่มีน้ำหนัก (fallback join เป็นเสี้ยวเล็กของ runtime)
+**บทเรียน:** Lv et al. multi-probe ออกแบบมาเพื่อ ANN index หนาแน่น — คนละ regime
+กับ seed table บาง (raw: outputs/margin_multiprobe_raw.csv)
+
 **บทสรุปเชิงทิศทาง:** หลัก "localize + กระจายดี" ถูกดูดซับเกือบหมดแล้วผ่าน tie-aware
 median (กระจาย/bit) + K tables + lift/log (locality) + fallback=1/multi-probe (adaptive
 resolution โดยพฤตินัย) — คานงัดที่เหลือ: rpTree hierarchical partition (การันตี equal-mass
@@ -325,7 +343,7 @@ textbook และผ่านด่านเดียวกัน: prototype �
 | numeric-only whitening | 0.196 vs base 0.250 (0/5) | 0.138 vs 0.155 (0/5) | **ปฏิเสธ** — แพ้ทั้งคู่ แย่กว่า full-whiten บน HC ด้วย |
 | robust contrast (cross-fit+shrink) | 0.268 (แพ้ plain 0.274) | 0.198 (ชนะ plain นิด) | parity — ไม่คุ้มความซับซ้อน |
 | table selection (160→greedy 80) | — | greedy 0.1555 < first80 0.1565 < **all160 0.1581** | **ปฏิเสธ** — selection overfit seed-split; "ใช้ทั้งหมด" ชนะอีกครั้ง; 80→160 = +1% (plateau) |
-| margin-aware multi-probe | ยังไม่ทดสอบ | — | deprioritized (K=80 ชนะ oracle แล้ว) |
+| margin-aware multi-probe | — | ทุกเงื่อนไขเท่ากัน (miss≈0 ที่ b10) | **ปฏิเสธ** — โซน miss สูง (adult 30 seeds, miss 82-89%) all-bit ชนะทุก T: 0.727 vs m4p 0.715 vs m2 0.694 (b20) |
 | tuner dedupe fix (P0-1) | — | — | **✅ แก้แล้ว + regression test** (supervised หายจริงตามที่ audit ชี้) |
 
 **การแก้ claim ของ audit:** contrast บน fraud ไม่ได้แพ้ — ด้วย baseline b10K80
@@ -388,9 +406,8 @@ whiten/contrast ชนะทั่วไป; whiten ต้องเป็น opt
      occupancy/`n_eff` เป็น guardrail ไม่ใช่เป้าหมาย.
    - เทียบ first-40, best-single-table top-40 และ greedy quality+diversity บน codes ชุดเดียว.
 
-4. **Margin-aware multi-probe**
-   - probe bits ที่ projection margin ใกล้ threshold ก่อน ภายใต้ probe budget คงที่;
-     วัด PR-AUC/recall gain เทียบ latency. นี่ช่วย boundary coverage แต่ไม่ถือว่าแก้ geometry.
+4. ~~**Margin-aware multi-probe**~~ — **✅ วัดแล้ว ปฏิเสธ** (ดู §5.4 / §8b;
+   outputs/margin_multiprobe_experiment.py)
 
 ### P2 — งานวิจัย architecture (ทำเมื่อ P0/P1 ผ่านเท่านั้น)
 
