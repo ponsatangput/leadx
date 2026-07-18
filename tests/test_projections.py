@@ -196,3 +196,16 @@ def test_whiten_folds_into_P_no_pipeline_change():
     bank = ProjectionBank(n_tables=3, n_bits=6, whiten=True, random_state=0).fit(Z)
     assert bank.P_.shape == (3, 20, 6)
     assert bank.thresholds_.shape == (3, 6)
+
+
+def test_whiten_applied_identity():
+    # audit P0: origin mode ที่ขอ whiten ต้องรายงานว่าไม่ได้ apply จริง
+    rng = np.random.default_rng(0)
+    Z = rng.standard_normal((2000, 10)).astype(np.float32)
+    b1 = ProjectionBank(n_tables=2, n_bits=4, whiten=True, random_state=0).fit(Z)
+    assert b1.whiten_applied_ is True
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        b2 = ProjectionBank(n_tables=2, n_bits=4, whiten=True,
+                            hash_mode="origin", random_state=0).fit(Z)
+    assert b2.whiten_applied_ is False

@@ -84,6 +84,9 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 clf = LeadX(mode="pu", tune=False, n_bits=10, n_tables=80,
             score_type="lift", agg="log", feature_weighting="contrast")
 clf.fit(X_positive, background=X_unlabeled)   # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
+# parity contract: ใน PU mode encoder + geometry จะ fit จาก background (population)
+# ไม่ใช่จาก seeds — สถิติของโมเดล (mean/std, thresholds, whitening) สะท้อน
+# ประชากรจริงแบบเดียวกับ benchmark ที่ validate ไว้
 scores = clf.score_samples(X_large)           # ranking score (lift scale)
 
 # หมายเหตุ: contrast/whiten เป็น dataset-specific (fraud temporal: whiten -36%!) —

@@ -139,22 +139,26 @@ class LeadX:
             raise ValueError(
                 "two_class ต้องมี y ครบทั้งสอง class — ถ้ามีแต่ positive ใช้ mode='pu'"
             )
-        self.encoder_ = FeatureEncoder().fit(df)
+        # Parity contract (audit P0): ใน PU ที่มี background — encoder และ geometry
+        # (projections/thresholds/whiten) fit จาก background *population*
+        # (y-independent, สถิติเสถียรกว่า, vocab ครบกว่า) ไม่ใช่จาก seeds ไม่กี่ตัว —
+        # ให้ production API ตรงกับ protocol ของ benchmark
+        enc_source = background if (self.mode == "pu" and background is not None) else df
+        self.encoder_ = FeatureEncoder().fit(enc_source)
         Z = self.encoder_.transform(df)
         # feature weighting (หลัง standardize มิฉะนั้นถูก z-score หักล้าง) — แก้ noise
         # dilution: ถ่วง feature ตาม |corr กับ y| ก่อน hash. ใช้ y → codes task-specific
         # (ปิด reuse ข้ามโจทย์) จึง opt-in default "none"
         Z_bg = self.encoder_.transform(background) if background is not None else None
-        self.feature_weights_ = self._compute_weights(Z, y, Z_bg)
-        if self.feature_weights_ is not None:
-            Z = Z * self.feature_weights_
-            if Z_bg is not None:
-                Z_bg = Z_bg * self.feature_weights_
         if self.tune:
+            # ส่ง Z ที่ *ยังไม่ถ่วงน้ำหนัก* — tuner cross-fit weights ต่อ fold เอง
+            # (ปิด OOF leak: validation fold ห้ามเห็น y ตัวเองผ่าน weights — audit P0)
+            Z_geom_raw = Z_bg if (self.mode == "pu" and Z_bg is not None) else Z
             tuner = Tuner(grid=self.grid, mode=self.mode,
                           cat_bit_frac=self.cat_bit_frac, hash_mode=self.hash_mode,
                           whiten=self.whiten, random_state=self.random_state)
-            best = tuner.tune(Z, y, Z_background=Z_bg, cat_mask=self.encoder_.cat_mask_)
+            best = tuner.tune(Z, y, Z_background=Z_bg, cat_mask=self.encoder_.cat_mask_,
+                              Z_geom=Z_geom_raw, feature_weighting=self.feature_weighting)
             self.tuning_results_ = tuner.results_
             cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights",
                                         "score_type", "alpha", "agg")}
@@ -167,23 +171,46 @@ class LeadX:
                    "n_tables": self.n_tables, "m": self.m, "weights": self.weights,
                    "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg,
                    "cat_bit_frac": self.cat_bit_frac, "whiten": self.whiten}
+        # weights เต็ม (จาก seeds ทั้งหมด) สำหรับ deploy — คำนวณหลัง tune เพื่อไม่ leak
+        # เข้าการประเมิน; ตอน deploy ใช้ข้อมูลทั้งหมดได้โดยชอบธรรม
+        self.feature_weights_ = self._compute_weights(Z, y, Z_bg)
+        if self.feature_weights_ is not None:
+            Z = Z * self.feature_weights_
+            if Z_bg is not None:
+                Z_bg = Z_bg * self.feature_weights_
+        Z_geom = Z_bg if (self.mode == "pu" and Z_bg is not None) else Z
         self.config_ = cfg
         if self.tune:
             # ใช้ prefix ของ bank ที่ Tuner ประเมินจริง — สิ่งที่ deploy = สิ่งที่วัด
             # (prefix slice ถูกต้องเพราะ codes ที่ประเมิน = mask_codes ของ bank นี้เอง)
             bank = tuner.best_bank_
-            P = np.ascontiguousarray(bank.P_[: cfg["n_tables"], :, : cfg["n_bits"]])
-            thr = np.ascontiguousarray(bank.thresholds_[: cfg["n_tables"], : cfg["n_bits"]])
-            self.hasher_ = HashEnsemble(P, thr)
-            # diagnostics ต้องสะท้อน prefix ที่ deploy จริง ไม่ใช่ bank เต็มของ tuner
-            proj_diag = projection_diagnostics(P, thr, Z, strategy=cfg["strategy"])
+            if bank is None:
+                # winning combo เป็น label-dependent (supervised/weighted — cross-fit
+                # ต่อ fold ตอน tune) → refit เต็มบนข้อมูลทั้งหมดสำหรับ deploy
+                bank = ProjectionBank(
+                    n_tables=cfg["n_tables"], n_bits=cfg["n_bits"],
+                    strategy=cfg["strategy"], hash_mode=self.hash_mode,
+                    cat_bit_frac=cfg["cat_bit_frac"], whiten=cfg["whiten"],
+                    random_state=self.random_state,
+                )
+                bank.fit(Z_geom if cfg["strategy"] != "supervised" else Z,
+                         y if self.mode == "two_class" else None,
+                         cat_mask=self.encoder_.cat_mask_)
+                self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
+                proj_diag = bank.diagnostics()
+            else:
+                P = np.ascontiguousarray(bank.P_[: cfg["n_tables"], :, : cfg["n_bits"]])
+                thr = np.ascontiguousarray(bank.thresholds_[: cfg["n_tables"], : cfg["n_bits"]])
+                self.hasher_ = HashEnsemble(P, thr)
+                # diagnostics ต้องสะท้อน prefix ที่ deploy จริง ไม่ใช่ bank เต็มของ tuner
+                proj_diag = projection_diagnostics(P, thr, Z, strategy=cfg["strategy"])
         else:
             bank = ProjectionBank(
                 n_tables=cfg["n_tables"], n_bits=cfg["n_bits"], strategy=cfg["strategy"],
                 hash_mode=self.hash_mode, cat_bit_frac=cfg["cat_bit_frac"],
                 whiten=cfg["whiten"], random_state=self.random_state,
             )
-            bank.fit(Z, y if self.mode == "two_class" else None,
+            bank.fit(Z_geom, y if self.mode == "two_class" else None,
                      cat_mask=self.encoder_.cat_mask_)
             self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
             proj_diag = bank.diagnostics()

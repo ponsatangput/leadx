@@ -50,6 +50,14 @@ variance ข้าม draws ต่ำทุกวิธี (std ≤ 0.005) | cos
 4. Annoy/HNSW refs: ข้าม — exact kNN เป็น oracle ที่แข็งกว่าสำหรับคำถาม headroom
    (ANN มีไว้เทียบ latency ซึ่งไม่ใช่คอขวด: leadx hash 80 tables = ~10s ต่อ 246k)
 
+## Provenance & repro (แก้ตาม audit P0)
+
+- **source of truth = raw CSVs** (locality_headroom_raw.csv / phase2b_raw.csv) —
+  ตัวเลขในตารางเป็น median ณ เวลารัน; gate verdict ตรวจซ้ำจาก raw ได้เสมอ
+- b8k80 อยู่ใน CONFIGS ของ script แล้ว (เดิมอยู่เฉพาะ raw จาก ad-hoc probe)
+- ผล combo whiten+contrast และ library-verification เป็น spot-check 3 draws
+  (บันทึกใน DESIGN_NOTES/commit log) — ไม่มี raw CSV แยก จัดเป็น evidence ชั้นรอง
+
 ## Reproduce
 
     uv run python outputs/locality_headroom_benchmark.py
