@@ -1,9 +1,9 @@
 # Acknowledgments
 
-- The original idea for this algorithm was developed around 2022 during the
-  author's time at Siam Commercial Bank (SCB), with the help of an intern
-  whose contribution the author gratefully acknowledges.
-  <!-- TODO(owner): ยืนยัน wording + ใส่ชื่อ intern หลังได้รับความยินยอม -->
+- The algorithm was conceived by the author around 2022 during his time at
+  Siam Commercial Bank (SCB). An intern helped implement and tune the
+  original version — a contribution the author gratefully acknowledges.
+  <!-- TODO(owner): ใส่ชื่อ intern หลังได้รับความยินยอม -->
 - The 2026 rewrite — library engineering, benchmarking discipline, and
   documentation — was developed as a personal project in close collaboration
   with **Claude (Anthropic)**.

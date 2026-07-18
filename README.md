@@ -127,7 +127,8 @@ frozen-backbone reuse are proven **separately**, not yet together.
 
 ## License & acknowledgments
 
-MIT. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) — the original idea dates to
-~2022 at SCB with the help of an intern; the 2026 rewrite is a personal
+MIT. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) — the algorithm was
+conceived by the author (~2022, during his time at SCB; an intern helped
+implement and tune the original version). The 2026 rewrite is a personal
 project built in collaboration with Claude (Anthropic), with external audits
 and adversarial reviews by ChatGPT 5.6 "Sol" (OpenAI).
