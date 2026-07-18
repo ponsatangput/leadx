@@ -305,3 +305,95 @@ textbook และผ่านด่านเดียวกัน: prototype �
 - **recursive refinement** ของ dense bucket — แก้ coverage imbalance (รอข้อมูลจริงก่อน)
 - **cross-fitted weights ใน Tuner** — ปิด leakage ของ feature_weighting เข้า OOF (§5.1)
 - **multi-class**, **isotonic calibration**, **GPU/out-of-core**
+
+## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
+
+### คำตัดสินจากผลล่าสุด
+
+Phase 2B เป็น **improvement เฉพาะบาง dataset ยังไม่ใช่ general improvement**:
+
+| production path, 10% seeds, median 3 draws | Home Credit PR-AUC | Fraud temporal PR-AUC |
+|---|---:|---:|
+| baseline b10,K80 | 0.1506 | **0.1736** |
+| `whiten=True` | 0.1675 (+11%) | 0.1111 (−36%) |
+| `feature_weighting="contrast"` | **0.2027 (+35%)** | 0.1677 (−3%) |
+
+Fraud ที่ 25% seeds: contrast 0.1755 เทียบ baseline 0.1872 (−6%). ดังนั้นห้ามเขียนว่า
+whiten/contrast ชนะทั่วไป; whiten ต้องเป็น opt-in/tuned และ contrast ต้อง validate ต่อ task.
+
+### P0 — แก้ correctness / evaluation ก่อนทดลอง algorithm เพิ่ม
+
+- [ ] **แก้ Tuner ที่ตัด supervised candidates ทิ้ง:** เงื่อนไข dedupe ของ
+  `cat_bit_frac` ตอนนี้บังคับ numeric/whiten ให้ใช้ค่าแรก แต่ supervised ให้ใช้ค่าสุดท้าย
+  ทำให้ default grid ไม่เคยประเมิน supervised หรือ supervised+whiten. เพิ่ม regression test
+  ที่ assert coverage ของ `(strategy, whiten)` ทุกชุดที่ขอ.
+- [ ] **ปิด OOF leakage:** fit supervised projections และ label-derived feature weights
+  ภายใน train fold แล้ว transform validation fold; แยก background-fit กับ background-eval
+  ใน PU tuner.
+- [ ] **ทำ benchmark ↔ production parity:** benchmark fit encoder/projections จาก population
+  แต่ `LeadX.fit(X_positive, background=...)` fit encoder จาก positive seeds. ตัดสิน contract
+  ให้ชัด (แนะนำ fit y-independent encoder/geometry จาก background population) แล้วให้ harness
+  เรียก public API เดียวกับที่ deploy.
+- [ ] **แก้ documentation/API example:** contrast ต้องมี `background`; `n_tables=80` ถูก ignore
+  เมื่อ `tune=True` เพราะ default grid สูงสุด K=40. ตัวอย่างต้องใช้ `tune=False` หรือเพิ่ม K=80
+  ใน grid อย่างตั้งใจ.
+- [ ] **ซ่อม reproducibility artifacts:** ตัวเลข exact-kNN gate ใน report ไม่ตรง raw/current
+  script, `b8,K80` มีใน raw แต่ไม่มีใน `CONFIGS`, และผล combo/library verification ไม่มี raw
+  artifact. ทุก claim ต้องมี script + raw rows + frozen config.
+- [ ] **method identity:** บันทึก `whiten_applied` แยกจากค่าที่ผู้ใช้ request; origin mode ที่
+  ขอ whiten แต่ถูกข้ามห้าม serialize/รายงานเสมือนว่า whitening ทำงานจริง.
+
+### P1 — improvement ราคาถูกที่ควรลองก่อนเปลี่ยน architecture
+
+1. **Numeric-only PCA/whitening**
+   - รักษา type-aware categorical bits ไว้ ไม่ผสม one-hot เข้า PCA ทั้งหมด.
+   - ablation `PCA64 no-whiten` vs `PCA64 whiten` เพื่อแยกผล dimensionality reduction
+     ออกจาก whitening; ตัด near-zero eigenvalues และ tune shrinkage ของ inverse variance.
+
+2. **Robust PU contrast weights**
+   - ใช้ standardized effect size + shrinkage เข้าหา weight=1 แทน normalize ด้วย max อย่างเดียว.
+   - tune ความแรง `lambda` แบบ cross-fit; ทดลอง clipped/rank weights กัน seed noise และ
+     contaminated background; แยก numeric/categorical relevance.
+
+3. **Overcomplete table selection (ยังไม่ได้ทำ)**
+   - สร้าง 120–160 candidate tables แล้วเลือก 40–80 จาก held-out marginal PU gain.
+   - objective ต้องมี locality quality floor + positive-mode coverage − residual redundancy;
+     occupancy/`n_eff` เป็น guardrail ไม่ใช่เป้าหมาย.
+   - เทียบ first-40, best-single-table top-40 และ greedy quality+diversity บน codes ชุดเดียว.
+
+4. **Margin-aware multi-probe**
+   - probe bits ที่ projection margin ใกล้ threshold ก่อน ภายใต้ probe budget คงที่;
+     วัด PR-AUC/recall gain เทียบ latency. นี่ช่วย boundary coverage แต่ไม่ถือว่าแก้ geometry.
+
+### P2 — งานวิจัย architecture (ทำเมื่อ P0/P1 ผ่านเท่านั้น)
+
+- [ ] **Balanced Local Projection Forest:** recursive node-local direction + local median,
+  หลาย trees, hierarchical shrinkage. ต้องเป็น local recursion จริง ไม่ใช่ global
+  pair-difference directions/adaptive-prefix scoring ที่เคยแพ้.
+- [ ] **Faithful ITQ / Anchor Graph Hashing:** prototype ปัจจุบันไม่ใช่ implementation ตาม
+  paper เต็ม (AGH ไม่มี graph eigensystem; ITQ ถูกบีบ PCA-10 + median). ผลลบปัจจุบันปฏิเสธ
+  ได้เฉพาะ prototype ไม่ใช่ algorithm family.
+- [ ] **Task-aware low-rank metric:** เรียน seed-vs-background geometry แบบ cross-fit แล้ว
+  hash ใน metric ใหม่; แยก method marker จาก reusable backbone.
+- [ ] **ANN speed frontier:** Exact-KNN ตอบ quality headroom แต่ไม่ตอบ production trade-off;
+  benchmark HNSW/Annoy/FAISS ด้วย candidate recall, latency และ memory ก่อนอ้างข้อได้เปรียบ.
+
+### Validation gate ที่ต้องใช้รอบถัดไป
+
+- freeze config จาก validation แล้วเปิด untouched outer test เพียงครั้งเดียว;
+- อย่างน้อย Home Credit + Fraud temporal + synthetic categorical/noise stress tests;
+- หลาย temporal windows/outer splits ไม่ใช่เปลี่ยน seed subset บน test เดิมอย่างเดียว;
+- วัด PR-AUC, P@0.1%, P@1%, recall@review-budget, stability, fit/predict time และ memory;
+- ship เมื่อ median PR-AUC +5% relative หรือ P@1% +3pp, ชนะอย่างน้อย 8/10 independent
+  outer runs และไม่ทำ secondary dataset ลดเกิน 3%.
+
+### ห้ามเดินซ้ำโดยไม่มีสมมติฐานใหม่
+
+- maximize `n_eff`/entropy ตรงๆ;
+- เพิ่ม bits เกินประมาณ 10 ขณะที่ seeds บาง;
+- adaptive-prefix scoring อย่างเดียว;
+- global pair-difference directions;
+- random feature bootstrap/subspace;
+- naive seed-mode clustering เมื่อหลักฐานต่อ mode บาง;
+- always-on whitening;
+- อ้างว่า ITQ/AGH ทั้ง family แพ้จาก proxy experiments ปัจจุบัน.
