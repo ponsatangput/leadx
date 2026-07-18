@@ -335,6 +335,11 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | variance ที่ seeds น้อยมาก (โซนธง imbalance) | `hier_depths` — EB shrink เข้าหา bucket แม่ข้าม prefix depths | +41% fraud 0.3%, +15% fraud 0.1% (§8d) |
 | scalability ที่ 10M แถว (โจทย์ตั้งต้น) | encoder preallocate f32 + `BackgroundStats` cache + `seed_rows`/`score_cached` | backbone 351s→51s; โจทย์ 2+ = 0.04s (§8e) |
 | mega-bucket ในย่านหนาแน่น (สมมติฐานเจ้าของ ต้นโปรเจกต์) | `engine="rpforest"` — rpTree: ทิศ+median ท้องถิ่นต่อ node = equal-mass | fraud 0.3% +39%, HC 0.3% +42%, natural +6% (new best); occupancy 6.3%→0.098% (§8f) |
+| rpforest ใช้กับ auto-tune ไม่ได้ | "engine" เป็นมิติใน tuner grid + `RPForest.prefix` + fit vectorized (−40%) + facade `engine="auto"` | tuner เลือก engine ต่อ dataset จาก OOF; deploy = prefix ที่วัดจริง (§8f) |
+
+**เส้นทางตัวเลขธง (home-credit PU 10% seeds, PR-AUC, parity ทุกจุด):**
+0.194 (baseline หลังปิด leakage) → 0.196 (+hier) → **0.208 (+rpforest, +7% รวม)**
+— extreme cells: fraud 0.3% 0.0235→0.0595 (2.5x), HC 0.3% 0.0047→0.0066 (+42%)
 
 **Top-3 การปรับที่มีค่าที่สุด:** (1) lift scoring — เปลี่ยน positioning ด้วยคณิตศาสตร์
 (2) type-aware bits — อุดรูรั่ว categorical (3) median/tie-aware hashing — ลบโค้ด

@@ -344,6 +344,30 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 
 สูสีบน dataset ที่แยกได้ดี ตามหลัง tree-based 2–6 points บนข้อมูล signal กระจาย/boundary โค้ง
 
+### สถานะปัจจุบันบนข้อมูลจริง — โจทย์ธง PU + imbalance (2026-07-18)
+
+เส้นทางตัวเลขธง **home-credit PU, seeds 10% ของ positives (~2,000), PR-AUC**
+(ทุกตัวเลขภายใต้ parity contract — ไม่มี leakage):
+
+| config | PR-AUC | Δ |
+|---|---|---|
+| bank b10K80 + contrast (baseline หลังปิด leakage) | 0.194 | — |
+| + `hier_depths` | 0.196 | +1% |
+| + `engine="rpforest"` | **0.208** | **+7% รวม** |
+
+โซน extreme imbalance ที่ข้อมูลเท่ากัน (10% seeds, ไม่มี negative label) —
+เทียบ HistGB PU-naive ที่จูนแล้ว:
+
+| cell | leadx (rpf+hier) | PU-naive | oracle label เต็ม |
+|---|---|---|---|
+| home-credit 3% / 1% / 0.3% | **.078 / .024 / .0066** | .074 / .018 / .0035 | .092 / .032 / .0074 |
+| fraud 0.3% / 0.1% | **.060 / .011** | .037 / .0025 | .159 / .055 |
+
+- ชนะ PU-naive: home-credit **ทุก ratio ที่วัด**, fraud ตั้งแต่ 0.3% ลงไป
+- allseeds เทียบ oracle: home-credit 91–95% ที่ 3–1% และ**ชนะที่ 0.3%** (137%)
+- รายละเอียด+raw: outputs/IMBALANCE_FOCUS_REPORT.md (ตาราง Large+imbalanced
+  ด้านล่างเป็นผลยุคแรกก่อน lift/contrast/rpforest — เก็บไว้เป็นประวัติ)
+
 ### Scale (วัดจริง 1M-10M แถว × 100 features, laptop 24GB)
 
 | n | backbone ครั้งเดียว | โจทย์ PU ถัดไป | score ประชากร | HistGB ต่อโจทย์ |
