@@ -351,6 +351,23 @@ textbook และผ่านด่านเดียวกัน: prototype �
 ของ audit มาจาก baseline K เล็ก → contrast general กว่าที่ audit สรุป
 (whiten ยังคง dataset-specific จริงตาม audit: แพ้ fraud ทุกแบบ)
 
+## 8c. Imbalance-focus benchmark (2026-07-18) — นิยาม "ดีกว่าวิธีอื่น" ให้ชัด
+
+คำถามจากผู้ใช้: จุดเด่นคือ imbalance — ตอนนี้ดีกว่าวิธีอื่นมั้ย? แยกคู่เทียบเป็น
+"ข้อมูลเท่ากัน" (PU 10% seeds: leadx b10K80+contrast vs HistGB/logreg PU-naive)
+กับเพดานอ้างอิง (HistGB label เต็ม, จูนตาม audit — **l2=1.0 จำเป็น**: default
+l2=0 พังที่ 0.1% ROC 0.53 ทุก random_state → เกือบสรุปกลับด้าน)
+รายละเอียด/ตารางเต็ม: outputs/IMBALANCE_FOCUS_REPORT.md (raw CSV เป็น source of truth)
+
+- **ที่ข้อมูลเท่ากัน crossover มีจริงบนข้อมูลจริง**: leadx ชนะ PU-naive เมื่อรุนแรง —
+  fraud 0.1% (20 seeds): PR 3.5x (.0086 vs .0025), lift@0.1% 57x vs 11x;
+  home-credit ชนะตั้งแต่ 1% ลงไป; จุดตัด dataset-dependent (HC ~1%, fraud ~0.2%)
+- **≥1-3% + seeds หลักร้อย**: HistGB PU-naive ยังชนะบน fraud — ไม่ใช่คำตอบทุกโจทย์
+- **ไม่ชนะ oracle จูนแล้วที่ไหนเลย** แต่ gap แคบลงตาม imbalance: HC allseeds
+  84→94% ของ oracle, fraud 58→69% — claim ที่ยืนได้คือ label-efficiency
+- **degrade นุ่มนวลสุด** (fraud ROC, positives หาย 30x): leadx −0.04 ≈ oracle −0.05
+  << PU-naive −0.19, logreg −0.23 — invariance ของ lift โผล่บนข้อมูลจริง
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
