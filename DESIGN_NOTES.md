@@ -368,6 +368,29 @@ l2=0 พังที่ 0.1% ROC 0.53 ทุก random_state → เกือบ
 - **degrade นุ่มนวลสุด** (fraud ROC, positives หาย 30x): leadx −0.04 ≈ oracle −0.05
   << PU-naive −0.19, logreg −0.23 — invariance ของ lift โผล่บนข้อมูลจริง
 
+## 8d. Hierarchical shrinkage — shipped (2026-07-18)
+
+งานแรกของ roadmap "แข็งแรงขึ้นในโซนที่ชนะ": ที่ seeds 20-60 ตัว bucket ลึกมี
+หลักฐาน 0-1 ตัว → variance คือตัวจำกัด แก้โดยเปลี่ยน shrink จาก "เข้าหา 1"
+เป็น "เข้าหา lift ของ bucket แม่" แบบ EB ลูกโซ่จากหยาบไปลึก:
+`L_d = (n_pos_d + α·L_parent) / (E_d + α)` — prefix structure (MSB-ordered)
+ให้แม่ฟรีด้วย bit-shift ต่างจาก adaptive-depth ที่ reject (อันนั้น*เลือก* depth
+เดียวต่อแถว อันนี้*รวม*ทุก depth) และแทน multi-probe ใน path นี้ไปเลย
+
+| cell | base | hier (α=2) | Δ rel |
+|---|---|---|---|
+| fraud 0.3% | .0235 | **.0331** | +41% |
+| fraud 0.1% | .0086 | **.0099** | +15% |
+| home-credit 1% | .0212 | **.0226** | +6.5% |
+| home-credit 0.3% | .0047 | .0047 | เสมอ |
+| home-credit 8% (regression check) | .1946 | .1964 | +0.9% |
+
+ชนะ/เสมอ 14/15 draws — gate ตั้งไว้ก่อนเห็นผล (ชนะ >=3/4 extreme + ไม่ regress
+ที่ natural) ผ่าน → ship เป็น `hier_depths` (opt-in, lift เท่านั้น, "auto" =
+(4,6,...,b)) ใน SeedScorer/LeadX/fit_task + save/load; ยังไม่เข้า DEFAULT_GRID
+ของ tuner (รอหลักฐาน two_class + grid budget) — prototype:
+outputs/hier_shrinkage_experiment.py (raw CSV)
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด

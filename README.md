@@ -168,6 +168,7 @@ project เฉพาะ categorical blocks (+tie-aware threshold = bipartition �
 | `mode` | `"two_class"` / `"pu"` | label สองฝั่ง / positive-unlabeled |
 | `strategy` | `"unsupervised"` (default) / `"supervised"` | คัด projection vectors แบบไม่ใช้ / ใช้ label (auto-tune ลองทั้งคู่) |
 | `weights` | `"mean"` (default) / `"coverage"` | รวม score ข้าม tables แบบเฉลี่ยตรง / ถ่วงให้ table ที่ miss เยอะพูดเบาลง |
+| `hier_depths` | `None` (default) / `"auto"` / tuple | hierarchical shrinkage ข้าม prefix depths (lift เท่านั้น): bucket ลึกที่หลักฐานบาง inherit lift จาก bucket แม่ — **+6-41% rel PR-AUC ที่ imbalance 1%-0.1%**, natural rate ไม่ regress; `"auto"` = (4,6,...,n_bits) |
 | `feature_weighting` | `"none"` (default) / `"corr"` / `"contrast"` | ถ่วง feature ก่อน hash: `"corr"` = \|corr กับ y\| (two_class); `"contrast"` = \|mean(seeds)−mean(bg)\| (pu + background — **+26-30% rel PR-AUC บน home-credit PU**) — ทั้งคู่ task-aware ปิด reuse |
 | `score_type` | `"prop"` (default) / `"lift"` | สัดส่วน smoothed / density ratio (lift) — lift เป็น **imbalance-invariant**: prior ไม่อยู่ในสูตร, fallback = 1 (เป็นกลาง), สเกลตีความได้ ("เข้มข้นกว่าค่าเฉลี่ย 3 เท่า") |
 | `alpha` | float (default 2) | shrink-toward-1 strength ของ lift — กล่องหลักฐานน้อยถูกดึงเข้า 1 (กัน outlier กล่องจิ๋ว) |

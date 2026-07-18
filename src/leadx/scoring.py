@@ -3,6 +3,23 @@ import numpy as np
 import polars as pl
 
 
+def resolve_hier_depths(hier_depths, n_bits: int):
+    """แปลงค่าจากผู้ใช้เป็น tuple depths: None → None, "auto" → (4, 6, ..., n_bits)"""
+    if hier_depths is None:
+        return None
+    if hier_depths == "auto":
+        return tuple(range(4, n_bits, 2)) + (n_bits,) if n_bits > 4 else (n_bits,)
+    return tuple(int(d) for d in hier_depths)
+
+
+def _lookup_counts(uniq: np.ndarray, cnt: np.ndarray, query: np.ndarray) -> np.ndarray:
+    """นับสมาชิก bucket ที่ตำแหน่ง query จากตาราง (uniq เรียงแล้ว, cnt) — numpy ล้วน"""
+    if len(uniq) == 0:
+        return np.zeros(len(query))
+    pos = np.clip(np.searchsorted(uniq, query), 0, len(uniq) - 1)
+    return np.where(uniq[pos] == query, cnt[pos], 0.0)
+
+
 def pu_score_range(scorer: "SeedScorer", *code_arrays) -> tuple[float, float]:
     """คำนวณ (lo, span) ของ raw PU score จาก codes ตอน fit
 
@@ -54,11 +71,19 @@ class SeedScorer:
     agg : {"mean", "log"}
         รวม lift ข้าม tables แบบ arithmetic หรือ geometric (log-domain, NB-style)
         — ใช้กับ score_type="lift" เท่านั้น
+    hier_depths : tuple[int] | None
+        hierarchical shrinkage ข้าม prefix depths (ใช้กับ score_type="lift"):
+        แทน shrink เข้าหา 1 ที่ depth เดียว ไล่ chain จากหยาบไปลึก
+        `L_d = (n_pos_d + α·L_parent) / (E_d + α)` — bucket ลึกที่หลักฐานบางจะ
+        inherit lift ของ bucket แม่ (ลด variance เมื่อ seeds น้อยมาก; วัดจริง:
+        +6-41% rel PR-AUC ที่ imbalance 1%-0.1%, ไม่ regress ที่ 8%)
+        depth สุดท้ายต้อง = n_bits; path นี้ไม่ใช้ multi_probe/coverage weights
+        (parent inheritance ทำหน้าที่ fallback แทน)
     """
 
     def __init__(self, mode="two_class", m=10.0, weights="mean",
                  multi_probe=True, n_bits=None,
-                 score_type="prop", alpha=2.0, agg="mean"):
+                 score_type="prop", alpha=2.0, agg="mean", hier_depths=None):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if weights not in ("mean", "coverage"):
@@ -69,6 +94,18 @@ class SeedScorer:
             raise ValueError(f"agg ไม่รู้จัก: {agg}")
         if score_type == "lift" and alpha <= 0:
             raise ValueError("lift ต้องการ alpha > 0 (กัน log(0) และกล่องหลักฐานว่าง)")
+        if hier_depths is not None:
+            if score_type != "lift":
+                raise ValueError("hier_depths ใช้ได้กับ score_type='lift' เท่านั้น")
+            hier_depths = tuple(int(d) for d in hier_depths)
+            if list(hier_depths) != sorted(set(hier_depths)) or hier_depths[0] < 1:
+                raise ValueError(f"hier_depths ต้องเรียงจากน้อยไปมากไม่ซ้ำ >= 1: {hier_depths}")
+            if n_bits is None or hier_depths[-1] != n_bits:
+                raise ValueError(
+                    f"hier_depths ต้องจบที่ n_bits (ความละเอียดเต็ม) — ได้ depths="
+                    f"{hier_depths}, n_bits={n_bits}"
+                )
+        self.hier_depths = hier_depths
         self.mode = mode
         self.m = m
         self.weights = weights
@@ -157,10 +194,60 @@ class SeedScorer:
                     .with_columns(score=(pl.col("n_total") + 1.0).log())
                 )
                 self.tables_.append(g.select("code", "score", "n_total"))
+        if self.hier_depths is not None:
+            self._fit_hier(codes, y, background_codes)
         return self
+
+    def _fit_hier(self, codes, y, background_codes):
+        """เก็บตารางนับ (n_pos, n_ref) ต่อ (table, depth) เป็น numpy lookup"""
+        if self.mode == "two_class":
+            pos_codes, ref_codes = codes[y == 1.0], codes
+        else:
+            pos_codes, ref_codes = codes, background_codes  # lift+pu มี bg การันตีแล้ว
+        self.hier_pos_total_ = float(pos_codes.shape[0])
+        self.hier_ref_total_ = float(ref_codes.shape[0])
+        self.hier_tables_ = []
+        for k in range(self.n_tables_):
+            per_depth = []
+            for d in self.hier_depths:
+                sh = np.uint64(self.n_bits - d)
+                pu_, pc_ = np.unique(pos_codes[:, k] >> sh, return_counts=True)
+                ru_, rc_ = np.unique(ref_codes[:, k] >> sh, return_counts=True)
+                per_depth.append((pu_, pc_.astype(np.float64),
+                                  ru_, rc_.astype(np.float64)))
+            self.hier_tables_.append(per_depth)
+
+    def _score_hier(self, codes: np.ndarray) -> np.ndarray:
+        """chain lift จากหยาบไปลึก: L_d = (n_pos_d + α·L_parent) / (E_d + α)
+        multi-probe/coverage ไม่ใช้ใน path นี้ — parent inheritance คือ fallback"""
+        n = codes.shape[0]
+        per_table = np.empty((n, self.n_tables_))
+        deep_miss = 0
+        for k in range(self.n_tables_):
+            L = np.ones(n)
+            for d, (pu_, pc_, ru_, rc_) in zip(self.hier_depths, self.hier_tables_[k]):
+                q = codes[:, k] >> np.uint64(self.n_bits - d)
+                npos = _lookup_counts(pu_, pc_, q)
+                nref = _lookup_counts(ru_, rc_, q)
+                E = self.hier_pos_total_ * nref / self.hier_ref_total_
+                L = (npos + self.alpha * L) / (E + self.alpha)
+            deep_miss += int((npos == 0).sum())
+            per_table[:, k] = L
+        # miss_rate_join ที่นี่ = สัดส่วนแถวที่ "ไม่มี seed" ที่ depth ลึกสุด (คีย์เดิม
+        # เพื่อ API เดียวกัน); ไม่มี final miss เพราะทุกแถวได้ค่าจาก chain เสมอ
+        self.diagnostics_ = {
+            "miss_rate_join": deep_miss / (n * self.n_tables_),
+            "miss_rate_final": 0.0,
+        }
+        w = np.full(self.n_tables_, 1.0 / self.n_tables_)
+        if self.agg == "log":
+            return np.exp(np.log(per_table) @ w)
+        return per_table @ w
 
     def score(self, codes: np.ndarray) -> np.ndarray:
         codes = np.asarray(codes, dtype=np.uint64)
+        if self.hier_depths is not None:
+            return self._score_hier(codes)
         n = codes.shape[0]
         per_table = np.empty((n, self.n_tables_))
         hit = np.empty(self.n_tables_)

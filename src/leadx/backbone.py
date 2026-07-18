@@ -18,7 +18,8 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, infer_hash_mode, mask_codes
 from .projections import ProjectionBank
-from .scoring import SeedScorer, normalize_pu, pu_score_range
+from .scoring import (SeedScorer, normalize_pu, pu_score_range,
+                      resolve_hier_depths)
 
 
 def _corr_weights(Z: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -108,7 +109,8 @@ class LeadXBackbone:
     def fit_task(self, y=None, mode="two_class", m=10.0, weights="mean",
                  n_bits=None, n_tables=None, seeds: pl.DataFrame | None = None,
                  background: pl.DataFrame | None = None,
-                 score_type="prop", alpha=2.0, agg="mean") -> "TaskModel":
+                 score_type="prop", alpha=2.0, agg="mean",
+                 hier_depths=None) -> "TaskModel":
         """สร้างโมเดลต่อโจทย์จาก codes ที่ cache ไว้ (ถูกมาก — แค่ group-by)
 
         Parameters
@@ -148,7 +150,8 @@ class LeadXBackbone:
         if background is not None:
             bg_codes = mask_codes(self.transform(background), b, self.n_bits)[:, :k]
         scorer = SeedScorer(mode=mode, m=m, weights=weights, n_bits=b,
-                            score_type=score_type, alpha=alpha, agg=agg).fit(
+                            score_type=score_type, alpha=alpha, agg=agg,
+                            hier_depths=resolve_hier_depths(hier_depths, b)).fit(
             seed_codes, y, background_codes=bg_codes)
         # PU calibration จาก fit (batch-invariant) — lift ไม่ต้อง (สเกลตีความได้ในตัว)
         pu_lo, pu_span = (

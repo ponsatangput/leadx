@@ -12,7 +12,7 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, infer_hash_mode
 from .projections import ProjectionBank, projection_diagnostics
-from .scoring import SeedScorer, normalize_pu, pu_score_range
+from .scoring import SeedScorer, normalize_pu, pu_score_range, resolve_hier_depths
 from .tuning import Tuner
 
 
@@ -62,6 +62,11 @@ class LeadX:
         สัดส่วน bits ที่ project เฉพาะ categorical blocks (แก้ hyperplane bits มองไม่
         เห็น one-hot); "auto" = ตามสัดส่วนมิติ; อยู่ใน tuner grid — tuner เลือก 0
         เองเมื่อ categorical เป็น noise
+    hier_depths : None | "auto" | sequence[int]
+        hierarchical shrinkage ข้าม prefix depths (score_type="lift" เท่านั้น):
+        "auto" = (4, 6, ..., n_bits) — bucket ลึกที่หลักฐานบาง inherit lift ของ
+        bucket แม่ ลด variance เมื่อ seeds น้อยมาก (วัดจริง: +6-41% rel PR-AUC
+        ที่ imbalance 1%-0.1%, natural rate ไม่ regress); default None = ปิด
     chunk_size : int
         ขนาด chunk ตอน predict — คุม peak memory บนข้อมูลใหญ่
     random_state : int
@@ -87,7 +92,7 @@ class LeadX:
                  strategy="unsupervised", weights="mean", grid=None,
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
                  hash_mode="median", cat_bit_frac="auto", whiten=False,
-                 chunk_size=1_000_000, random_state=0):
+                 hier_depths=None, chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if feature_weighting not in ("none", "corr", "contrast"):
@@ -107,6 +112,7 @@ class LeadX:
         self.hash_mode = hash_mode
         self.cat_bit_frac = cat_bit_frac
         self.whiten = whiten
+        self.hier_depths = hier_depths
         self.chunk_size = chunk_size
         self.random_state = random_state
 
@@ -216,9 +222,17 @@ class LeadX:
             proj_diag = bank.diagnostics()
         codes = self.hasher_.transform(Z)
         bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
+        hier = resolve_hier_depths(self.hier_depths, cfg["n_bits"])
+        if hier is not None and cfg["score_type"] != "lift":
+            warnings.warn(
+                "hier_depths ใช้ได้กับ score_type='lift' เท่านั้น — ปิด hierarchical "
+                f"shrinkage สำหรับ config นี้ (score_type={cfg['score_type']!r})"
+            )
+            hier = None
         self.scorer_ = SeedScorer(
             mode=self.mode, m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
+            hier_depths=hier,
         ).fit(codes, y, background_codes=bg_codes)
         self._pi = float(y.mean()) if self.mode == "two_class" else None
         # PU calibration: normalize ด้วยค่าคงที่จาก fit (batch-invariant) — spec ห้าม
@@ -325,6 +339,18 @@ class LeadX:
             for k, t in enumerate(self.scorer_.tables_)
         ])
         tables.write_parquet(path / "tables.parquet")
+        hier = getattr(self.scorer_, "hier_depths", None)
+        if hier is not None:
+            frames = []
+            for k, per_depth in enumerate(self.scorer_.hier_tables_):
+                for d, (pu_, pc_, ru_, rc_) in zip(hier, per_depth):
+                    for kind, u, c in (("pos", pu_, pc_), ("ref", ru_, rc_)):
+                        frames.append(pl.DataFrame({
+                            "table": np.full(len(u), k, dtype=np.int32),
+                            "depth": np.full(len(u), d, dtype=np.int32),
+                            "kind": [kind] * len(u), "code": u, "cnt": c,
+                        }))
+            pl.concat(frames).write_parquet(path / "hier_tables.parquet")
         meta = {
             "mode": self.mode,
             "config": self.config_,
@@ -339,6 +365,9 @@ class LeadX:
             "pi": self._pi,
             "feature_weights": None if self.feature_weights_ is None
             else self.feature_weights_.tolist(),
+            "hier_depths": None if hier is None else list(hier),
+            "hier_pos_total": getattr(self.scorer_, "hier_pos_total_", None),
+            "hier_ref_total": getattr(self.scorer_, "hier_ref_total_", None),
             "polars_version": pl.__version__,
         }
         (path / "meta.json").write_text(json.dumps(meta))
@@ -362,6 +391,7 @@ class LeadX:
             hash_mode=infer_hash_mode(meta.get("hash_mode"), thresholds),
             whiten=meta.get("whiten", False),
             cat_bit_frac=cfg["cat_bit_frac"],
+            hier_depths=meta.get("hier_depths"),
             chunk_size=meta["chunk_size"],
         )
         clf._pi = meta.get("pi")
@@ -375,9 +405,11 @@ class LeadX:
         clf.feature_weights_ = None if fw is None else np.asarray(fw, dtype=np.float32)
         clf.encoder_ = FeatureEncoder.from_dict(meta["encoder"])
         clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
+        hier = meta.get("hier_depths")
         scorer = SeedScorer(
             mode=meta["mode"], m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
+            hier_depths=None if hier is None else tuple(hier),
         )
         all_tables = pl.read_parquet(path / "tables.parquet")
         scorer.tables_ = [
@@ -386,6 +418,26 @@ class LeadX:
         ]
         scorer.n_tables_ = cfg["n_tables"]
         scorer.prior_ = meta["prior"]
+        if hier is not None:
+            ht = pl.read_parquet(path / "hier_tables.parquet").sort("code")
+            scorer.hier_pos_total_ = meta["hier_pos_total"]
+            scorer.hier_ref_total_ = meta["hier_ref_total"]
+            scorer.hier_tables_ = []
+            for k in range(cfg["n_tables"]):
+                per_depth = []
+                for d in hier:
+                    sub = ht.filter((pl.col("table") == k) & (pl.col("depth") == d))
+                    parts = {
+                        kind: sub.filter(pl.col("kind") == kind)
+                        for kind in ("pos", "ref")
+                    }
+                    per_depth.append((
+                        parts["pos"]["code"].to_numpy().astype(np.uint64),
+                        parts["pos"]["cnt"].to_numpy().astype(np.float64),
+                        parts["ref"]["code"].to_numpy().astype(np.uint64),
+                        parts["ref"]["cnt"].to_numpy().astype(np.float64),
+                    ))
+                scorer.hier_tables_.append(per_depth)
         clf.scorer_ = scorer
         clf.diagnostics_ = {"config": cfg}
         return clf
