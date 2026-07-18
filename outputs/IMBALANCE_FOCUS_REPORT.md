@@ -87,7 +87,10 @@ HistGB ทุกตัวใช้ hyperparameters ที่ audit จูน (lr
 (3% / 1% / 0.3%) — ที่ 0.3% **ชนะ oracle ที่จูนแล้ว** (.0102 vs .0074; เกิน
 max ของ oracle ทุก random_state ที่วัดไว้ .0043-.0088) — claim "ชนะ oracle"
 ที่เคยถอนกลับมาแบบชอบธรรมในโซนแคบ; fraud allseeds 0.1% ต่ำกว่า bank
-(.029 vs .044 — single fit, จดไว้เป็น anomaly ยังไม่อธิบาย)
+(.029 vs .044) — **ปิดแล้ว**: decomposition ({engine}×{hier}×3 seeds,
+rpf_anomaly_raw.csv) ชี้ว่าเป็นผลของ hier ที่ dilute เมื่อ seeds หลักร้อย
+(fraud) + seed variance ใหญ่ ไม่ใช่ข้อบกพร่องของ forest (rpf_flat .038 ≈
+bank_flat .041); แนวใช้งาน: hier เปิดเมื่อ seeds น้อย ปิดเมื่อ seeds มาก
 
 ## Reproduce
 

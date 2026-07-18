@@ -294,6 +294,14 @@ tables scaling) miss≈0 → probe ไม่เคยทำงาน (2) โซ�
 **บทเรียน:** Lv et al. multi-probe ออกแบบมาเพื่อ ANN index หนาแน่น — คนละ regime
 กับ seed table บาง (raw: outputs/margin_multiprobe_raw.csv)
 
+**Covariance-sampled node directions** (rpforest variant: ทิศต่อ node ~
+N(0, Σ_node) ผ่าน (Z−μ)ᵀr — PCA-flavored แต่คง diversity; 3 draws vs rpf
+random draw เดียวกัน): ชนะ 1/4 cells (fraud 0.1% +32%) แพ้ HC 0.3% −16%
+เสมอที่เหลือ natural ไม่ขยับ + fit แพง 1.5-1.7x → **ปฏิเสธ** — สอดคล้อง
+บทเรียนเดิม: หลัง standardize ทิศ isotropic เพียงพอ (pair-difference, whiten
+dataset-specific) และ equal-mass split จัดการ density แล้ว การปรับ*ทิศ*ตาม
+variance ไม่เพิ่มอะไร (raw: rpf_cov_raw.csv)
+
 **บทสรุปเชิงทิศทาง:** หลัก "localize + กระจายดี" ถูกดูดซับเกือบหมดแล้วผ่าน tie-aware
 median (กระจาย/bit) + K tables + lift/log (locality) + fallback=1/multi-probe (adaptive
 resolution โดยพฤตินัย) — คานงัดที่เหลือ: rpTree hierarchical partition (การันตี equal-mass
@@ -443,8 +451,12 @@ tree path → SeedScorer/hier/mask_codes/BackgroundStats ใช้ร่วม�
 Trade-offs ที่จดไว้: fit+transform ~2-4.5x ของ single-matmul; model size
 K×(2^b−1)×D f32 (~51MB ที่ K80 b10 D155 vs ~500KB ของ bank); ยังไม่รองรับ
 tune=True (tuner ทำ prefix masking บน bank); cat_bit_frac/whiten ไม่มีผลใน
-engine นี้; hier บน forest ช่วย HC แต่ neutral-ลบเล็กบน fraud 0.3% (flat .055
-vs hier .046 — จดไว้ยังไม่สรุป) — prototype/raw: outputs/rpforest_experiment.py
+engine นี้; hier บน forest: ปิดประเด็นแล้วด้วย decomposition ที่ fraud 0.1% allseeds
+({engine}×{hier}×3 seeds — rpf_anomaly_raw.csv): **hier ช่วยเมื่อ seeds
+หลักสิบ, dilute เมื่อ seeds หลักร้อยบน fraud** (−10% bank, −19% rpf ที่ 203
+seeds) — anomaly ในตาราง positioning คือ confound นี้ + seed variance ไม่ใช่
+ข้อบกพร่องของ forest; แนวใช้งาน: hier_depths="auto" สำหรับ seeds น้อย,
+ปิดเมื่อ seeds มาก — prototype/raw: outputs/rpforest_experiment.py
 
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
