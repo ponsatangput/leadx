@@ -299,12 +299,12 @@ N(0, Σ_node) ผ่าน (Z−μ)ᵀr — PCA-flavored แต่คง diversi
 random draw เดียวกัน): ชนะ 1/4 cells (fraud 0.1% +32%) แพ้ HC 0.3% −16%
 เสมอที่เหลือ natural ไม่ขยับ + fit แพง 1.5-1.7x → **ปฏิเสธ** — สอดคล้อง
 บทเรียนเดิม: หลัง standardize ทิศ isotropic เพียงพอ (pair-difference, whiten
-dataset-specific) และ equal-mass split จัดการ density แล้ว การปรับ*ทิศ*ตาม
+dataset-specific) และ split แบบ ~balanced จัดการ density แล้ว การปรับ*ทิศ*ตาม
 variance ไม่เพิ่มอะไร (raw: rpf_cov_raw.csv)
 
 **บทสรุปเชิงทิศทาง:** หลัก "localize + กระจายดี" ถูกดูดซับเกือบหมดแล้วผ่าน tie-aware
 median (กระจาย/bit) + K tables + lift/log (locality) + fallback=1/multi-probe (adaptive
-resolution โดยพฤตินัย) — คานงัดที่เหลือ: rpTree hierarchical partition (การันตี equal-mass
+resolution โดยพฤตินัย) — คานงัดที่เหลือ: rpTree hierarchical partition (balance โดยประมาณบน fit sample
 โดยโครงสร้าง — งาน v3 ใหญ่, แลก single-matmul) และ validation กับข้อมูลจริง
 
 **Feature bootstrap / random subspace ต่อ table** (สุ่ม subset ของ features ให้แต่ละ
@@ -334,7 +334,7 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | audit P0: OOF leakage / benchmark↔production parity | cross-fit ต่อ fold, PU bg split, encoder fit จาก background | ตัวเลขรายงานเชื่อได้ (noise-leak bound test) |
 | variance ที่ seeds น้อยมาก (โซนธง imbalance) | `hier_depths` — EB shrink เข้าหา bucket แม่ข้าม prefix depths | +41% fraud 0.3%, +15% fraud 0.1% (§8d) |
 | scalability ที่ 10M แถว (โจทย์ตั้งต้น) | encoder preallocate f32 + `BackgroundStats` cache + `seed_rows`/`score_cached` | backbone 351s→51s; โจทย์ 2+ = 0.04s (§8e) |
-| mega-bucket ในย่านหนาแน่น (สมมติฐานเจ้าของ ต้นโปรเจกต์) | `engine="rpforest"` — rpTree: ทิศ+median ท้องถิ่นต่อ node = equal-mass | fraud 0.3% +39%, HC 0.3% +42%, natural +6% (new best); occupancy 6.3%→0.098% (§8f) |
+| mega-bucket ในย่านหนาแน่น (สมมติฐานเจ้าของ ต้นโปรเจกต์) | `engine="rpforest"` — rpTree: ทิศ+median ท้องถิ่นต่อ node → balanced โดยประมาณบน fit sample | fraud 0.3% +39%, HC 0.3% +42%, natural +6% (ratio-of-medians, prototype harness — paired/provenance ดู §8f); occupancy 6.3%→0.098% |
 | rpforest ใช้กับ auto-tune ไม่ได้ | "engine" เป็นมิติใน tuner grid + `RPForest.prefix` + fit vectorized (−40%) + facade `engine="auto"` | tuner เลือก engine ต่อ dataset จาก OOF; deploy = prefix ที่วัดจริง (§8f) |
 
 **เส้นทางตัวเลขธง (home-credit PU 10% seeds, PR-AUC, parity ทุกจุด):**

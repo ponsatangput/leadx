@@ -132,7 +132,7 @@ bit_j(x) = 1 if (x · p_j) > 0 else 0
 
 ### 2. Ensemble ของ K hash tables
 
-table เดียวหยาบมาก (แต่ละ bucket คือกรวยกว้างผ่าน feature space) — **K tables ต่างหากที่กู้ resolution กลับมา**: สัดส่วน table ที่คู่จุดชนกัน = ตัวประมาณแบบ smooth ของ `(1 − θ/π)^B` → ensemble แปลง partition หยาบหลายอันให้เป็น **similarity kernel ต่อเนื่อง** (นี่คือ soft-kNN) คะแนนสุดท้ายเฉลี่ยข้ามทุก table
+table เดียวหยาบมาก (แต่ละ bucket คือกรวยกว้างผ่าน feature space) — **K tables ต่างหากที่กู้ resolution กลับมา**: สัดส่วน table ที่คู่จุดชนกัน = ตัวประมาณแบบ smooth ของ `(1 − θ/π)^B` *(เช่นเดิม: รูปปิดนี้ของ origin SimHash — median/rpforest ให้ kernel ลักษณะเดียวกันแต่ไม่มีสูตรรูปปิด)* → ensemble แปลง partition หยาบหลายอันให้เป็น **similarity kernel ต่อเนื่อง** (นี่คือ soft-kNN) คะแนนสุดท้ายเฉลี่ยข้ามทุก table
 
 ### 3. Seed-based scoring
 
@@ -201,8 +201,12 @@ clf.tuning_results_    # Polars DataFrame — ทุก config เรียง�
 - **n_bits น้อยลง** = mask เอา prefix bits (`code >> shift`) — bits เรียงจากคุณภาพสูงสุดไว้แล้ว
 - **n_tables น้อยลง** = ใช้ subset แรก
 
-การลอง 100 configs จึงมีต้นทุนแทบเท่าลอง 1 config — และ**โมเดลสุดท้ายคือ prefix ของ
-bank ที่ถูกประเมินจริง** (ไม่ refit ใหม่: สิ่งที่ deploy = สิ่งที่วัด) ปิด auto-tune แล้วกำหนดเองได้:
+prefix reuse ทำให้ scoring configs ทั้งชุด (n_bits × n_tables × m × ...) ประเมินได้
+จาก hash ชุดเดียว **ภายใน geometry เดียวกัน** — แต่ engine / strategy / whiten /
+label-dependent folds (feature weighting, supervised) ยังต้องสร้าง geometry แยก
+ของใครของมัน — และสำหรับ winner แบบ label-free **โมเดลสุดท้ายคือ prefix ของ
+bank ที่ถูกประเมินจริง** (ไม่ refit ใหม่: สิ่งที่ deploy = สิ่งที่วัด; winner แบบ
+label-dependent จะ refit เต็ม) ปิด auto-tune แล้วกำหนดเองได้:
 
 ```python
 clf = LeadX(tune=False, n_bits=14, n_tables=10, m=10.0)
@@ -272,14 +276,6 @@ bb2 = LeadXBackbone.load("backbone_dir")
 ## API reference
 
 ### `LeadX` — facade โจทย์เดียวจบ
-
-```python
-LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
-      strategy="unsupervised", weights="mean", grid=None,
-      feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
-      hash_mode="median", cat_bit_frac="auto",
-      chunk_size=1_000_000, random_state=0)
-```
 
 ```python
 LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
