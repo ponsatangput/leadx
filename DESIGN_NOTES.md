@@ -391,6 +391,26 @@ l2=0 พังที่ 0.1% ROC 0.53 ทุก random_state → เกือบ
 ของ tuner (รอหลักฐาน two_class + grid budget) — prototype:
 outputs/hier_shrinkage_experiment.py (raw CSV)
 
+## 8e. Scale validation 1M-10M + สองบั๊ก scalability (2026-07-18)
+
+งานที่สองของ roadmap: พิสูจน์จุดเด่น "train ครั้งเดียวใช้หลายโจทย์" ที่ scale
+ตั้งต้นของโจทย์ (10M แถว × 100 features) — ตัวเลขเต็ม: outputs/SCALE_VALIDATION_REPORT.md
+
+**ผล (10M แถว, 24GB laptop):** backbone 51s ครั้งเดียว → โจทย์ PU ถัดไป **0.04s**
+(vs HistGB ~115s/โจทย์ + ต้อง label เต็ม → 20 โจทย์เร็วกว่า ~30x, marginal ~3,000x);
+score ประชากร 10M = 31s; peak RSS 12.2GB; ROC ไม่เสื่อมตาม scale (ดีขึ้น:
+0.873→0.924 — background ใหญ่ = denominator นิ่ง)
+
+**การวัดรอบแรกเปิดโปงบั๊ก 2 ตัว (แก้ + equivalence tests):**
+1. encoder.transform สะสม blocks f64 + hstack → peak ~35GB ที่ 10M → memory
+   compression ทำ 318s (super-linear) → preallocate f32: **25s**
+2. fit_task จ่าย group-by background (task-independent!) ซ้ำทุกโจทย์ 21s →
+   `BackgroundStats` memoize บน backbone ต่อ (b,k,depths): โจทย์ 2+ = **0.04s**
+   + API ใหม่: `fit_task(seed_rows=..., background="cached")`, `TaskModel.score_cached()`
+
+**บทเรียน:** benchmark ที่ 300k มองไม่เห็นทั้งสองตัว — super-linear โผล่เมื่อชน
+memory ceiling และ "จ่ายซ้ำ" เจ็บจริงเมื่อของที่จ่ายซ้ำโต 30 เท่า
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด

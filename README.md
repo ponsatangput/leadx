@@ -336,6 +336,17 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 
 สูสีบน dataset ที่แยกได้ดี ตามหลัง tree-based 2–6 points บนข้อมูล signal กระจาย/boundary โค้ง
 
+### Scale (วัดจริง 1M-10M แถว × 100 features, laptop 24GB)
+
+| n | backbone ครั้งเดียว | โจทย์ PU ถัดไป | score ประชากร | HistGB ต่อโจทย์ |
+|---|---|---|---|---|
+| 1M | 9.6s | 0.02s | 3.0s | 10.7s |
+| 10M | 50.8s | **0.04s** | 31.2s | ~115s (extrapolate) |
+
+หลายโจทย์บนประชากรเดียว: `bb.fit_task(seed_rows=..., background="cached")` +
+`task.score_cached()` — โจทย์ใหม่จ่ายแค่ group-by ของ seeds (~40ms ที่ 10M);
+ดู outputs/SCALE_VALIDATION_REPORT.md
+
 ### Large + imbalanced (PR-AUC — เหมาะ imbalanced กว่า ROC-AUC)
 
 | train / test | metric | **leadx** | HistGradBoost | LogReg |
