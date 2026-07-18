@@ -335,8 +335,8 @@ textbook และผ่านด่านเดียวกัน: prototype �
 
 ## 6. ทิศทางที่พักไว้ (พิจารณา v3)
 
-- **PCA/ZCA whiten / ITQ** — แก้ anisotropy ให้เส้นสุ่มตัดตรงที่ข้อมูลอยู่จริง (พักเพราะเปลี่ยน data distribution)
-- **recursive refinement** ของ dense bucket — แก้ coverage imbalance (รอข้อมูลจริงก่อน)
+- ~~**PCA/ZCA whiten**~~ — ✅ ship แล้ว (Phase 2B: `whiten` ใน tuner grid; ITQ วัดแล้ว reject — §5.4/§8)
+- ~~**recursive refinement** ของ dense bucket~~ — ✅ ทำแล้วในรูป `engine="rpforest"` (§8f — mega-bucket ยืนยัน+แก้)
 - ~~**cross-fitted weights ใน Tuner**~~ — ✅ ทำแล้ว (audit P0 — ดู §5.1 ข้อ 1)
 - **multi-class**, **isotonic calibration**, **GPU/out-of-core**
 

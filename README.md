@@ -79,10 +79,12 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 ### PU learning (มีแต่ positive ที่ยืนยันแล้ว)
 
 ```python
-# config แนะนำสำหรับ PU: bits ต่ำ + tables เยอะ (tune=False เพราะ n_bits/n_tables
-# จะถูก tuner ทับถ้าเปิด tune; และ contrast ต้องมี background เสมอ)
+# config แนะนำสำหรับ PU: bits ต่ำ + tables เยอะ + rpforest + hier
+# (แม่นสุดที่วัดได้: home-credit PU 0.208 vs hyperplane 0.196 — ดู DESIGN_NOTES §8f;
+# ถ้าต้องการ fit เร็ว/model เล็ก ตัด engine/hier ออก = hyperplane เดิม)
 clf = LeadX(mode="pu", tune=False, n_bits=10, n_tables=80,
-            score_type="lift", agg="log", feature_weighting="contrast")
+            score_type="lift", agg="log", feature_weighting="contrast",
+            engine="rpforest", hier_depths="auto")
 clf.fit(X_positive, background=X_unlabeled)   # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
 # parity contract: ใน PU mode encoder + geometry จะ fit จาก background (population)
 # ไม่ใช่จาก seeds — สถิติของโมเดล (mean/std, thresholds, whitening) สะท้อน
