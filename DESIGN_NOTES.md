@@ -318,6 +318,21 @@ textbook และผ่านด่านเดียวกัน: prototype �
 - **cross-fitted weights ใน Tuner** — ปิด leakage ของ feature_weighting เข้า OOF (§5.1)
 - **multi-class**, **isotonic calibration**, **GPU/out-of-core**
 
+## 8b. ผลทดสอบข้อเสนอ P1 ของ audit (2026-07-18, b10K80 baseline, PU 10% seeds)
+
+| ข้อเสนอ | fraud (temporal) | home-credit | คำตัดสิน |
+|---|---|---|---|
+| numeric-only whitening | 0.196 vs base 0.250 (0/5) | 0.138 vs 0.155 (0/5) | **ปฏิเสธ** — แพ้ทั้งคู่ แย่กว่า full-whiten บน HC ด้วย |
+| robust contrast (cross-fit+shrink) | 0.268 (แพ้ plain 0.274) | 0.198 (ชนะ plain นิด) | parity — ไม่คุ้มความซับซ้อน |
+| table selection (160→greedy 80) | — | greedy 0.1555 < first80 0.1565 < **all160 0.1581** | **ปฏิเสธ** — selection overfit seed-split; "ใช้ทั้งหมด" ชนะอีกครั้ง; 80→160 = +1% (plateau) |
+| margin-aware multi-probe | ยังไม่ทดสอบ | — | deprioritized (K=80 ชนะ oracle แล้ว) |
+| tuner dedupe fix (P0-1) | — | — | **✅ แก้แล้ว + regression test** (supervised หายจริงตามที่ audit ชี้) |
+
+**การแก้ claim ของ audit:** contrast บน fraud ไม่ได้แพ้ — ด้วย baseline b10K80
+(config production) contrast **ชนะ fraud 5/5 (+10%: 0.274 vs 0.250)** — ผล −3%
+ของ audit มาจาก baseline K เล็ก → contrast general กว่าที่ audit สรุป
+(whiten ยังคง dataset-specific จริงตาม audit: แพ้ fraud ทุกแบบ)
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
