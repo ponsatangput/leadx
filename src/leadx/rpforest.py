@@ -59,6 +59,10 @@ class RPForest:
         self.random_state = random_state
 
     def fit(self, Z: np.ndarray) -> "RPForest":
+        """สร้างโครง forest — vectorized ต่อ level: สุ่มทิศทั้ง level เป็น batch,
+        project ด้วย gather+einsum ครั้งเดียว, threshold ต่อ node จาก lexsort
+        (per-node loop เหลือแค่ ops ถูกๆ บน slice ที่เรียงแล้ว — ไม่มี matvec/sort
+        ต่อ node; จำเป็นสำหรับ tuner ที่ fit forest ต่อ fold)"""
         rng = np.random.default_rng(self.random_state)
         Z = np.ascontiguousarray(Z, dtype=np.float32)
         if Z.shape[0] > self.sample_size:
@@ -66,28 +70,50 @@ class RPForest:
         n, d = Z.shape
         n_nodes = 2 ** self.n_bits - 1
         self.dim = d
-        self.dirs_ = np.zeros((self.n_tables, n_nodes, d), dtype=np.float32)
+        self.dirs_ = np.empty((self.n_tables, n_nodes, d), dtype=np.float32)
         self.thr_ = np.zeros((self.n_tables, n_nodes), dtype=np.float32)
         for t in range(self.n_tables):
             node_of = np.zeros(n, dtype=np.int64)
             for lvl in range(self.n_bits):
-                base = 2 ** lvl - 1
-                order = np.argsort(node_of, kind="stable")
-                bounds = np.searchsorted(node_of[order], np.arange(2 ** lvl + 1))
-                new_node = np.empty(n, dtype=np.int64)
-                for node in range(2 ** lvl):
-                    idx = order[bounds[node]:bounds[node + 1]]
-                    g = rng.standard_normal(d).astype(np.float32)
-                    g /= np.linalg.norm(g) + 1e-12
-                    self.dirs_[t, base + node] = g
-                    if len(idx) == 0:
+                base, m = 2 ** lvl - 1, 2 ** lvl
+                G = rng.standard_normal((m, d)).astype(np.float32)
+                G /= np.linalg.norm(G, axis=1, keepdims=True) + 1e-12
+                self.dirs_[t, base:base + m] = G
+                proj = np.einsum("ij,ij->i", Z, G[node_of])
+                order = np.lexsort((proj, node_of))
+                sp = proj[order]
+                bounds = np.searchsorted(node_of[order], np.arange(m + 1))
+                thr_lvl = np.zeros(m, dtype=np.float32)
+                for node in range(m):
+                    lo, hi = bounds[node], bounds[node + 1]
+                    if hi <= lo:
                         continue  # node ว่าง (tie บังคับ) — ทิศสุ่ม/thr 0 พอ
-                    proj = Z[idx] @ g
-                    thr = _node_threshold(proj)
-                    self.thr_[t, base + node] = thr
-                    new_node[idx] = 2 * node + (proj > thr)
-                node_of = new_node
+                    col = sp[lo:hi]
+                    cuts = np.nonzero(col[:-1] < col[1:])[0]
+                    if len(cuts) == 0:
+                        thr_lvl[node] = col[0]
+                        continue
+                    frac = (cuts + 1) / (hi - lo)
+                    best = cuts[int(np.argmin(np.abs(frac - 0.5)))]
+                    thr_lvl[node] = (col[best] + col[best + 1]) / 2.0
+                self.thr_[t, base:base + m] = thr_lvl
+                node_of = 2 * node_of + (proj > thr_lvl[node_of])
         return self
+
+    def prefix(self, n_bits: int, n_tables: int) -> "RPForest":
+        """forest ย่อยที่ depth/trees น้อยลง — nodes ของ b levels แรกคือ slice
+        `dirs_[:k, :2^b-1]` ตรงๆ (BFS order) → deploy prefix ที่ tuner ประเมิน
+        ได้โดยไม่ refit (สิ่งที่ deploy = สิ่งที่วัด)"""
+        if n_bits > self.n_bits or n_tables > self.n_tables:
+            raise ValueError(
+                f"prefix ({n_bits}, {n_tables}) เกิน forest ({self.n_bits}, {self.n_tables})"
+            )
+        n_nodes = 2 ** n_bits - 1
+        return RPForest.from_arrays(
+            np.ascontiguousarray(self.dirs_[:n_tables, :n_nodes]),
+            np.ascontiguousarray(self.thr_[:n_tables, :n_nodes]),
+            sample_size=self.sample_size, random_state=self.random_state,
+        )
 
     def transform(self, Z: np.ndarray, chunk_size: int = 1_000_000) -> np.ndarray:
         """traverse ทุก tree level-by-level → leaf codes (n, n_tables) uint64"""

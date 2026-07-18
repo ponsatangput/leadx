@@ -63,12 +63,13 @@ class LeadX:
         สัดส่วน bits ที่ project เฉพาะ categorical blocks (แก้ hyperplane bits มองไม่
         เห็น one-hot); "auto" = ตามสัดส่วนมิติ; อยู่ใน tuner grid — tuner เลือก 0
         เองเมื่อ categorical เป็น noise
-    engine : {"hyperplane", "rpforest"}
-        "hyperplane" — global random hyperplanes + median (default, single-matmul,
-        รองรับ tune); "rpforest" — balanced rpTree forest: ทิศสุ่มต่อ node + median
-        ท้องถิ่น → bucket ขนาดเท่ากันโดยโครงสร้าง (ฆ่า mega-bucket — วัดจริง PU:
-        fraud 0.3% +39%, home-credit natural +6% เทียบ hyperplane+hier; fit แพง
-        กว่า ~2-4x, ยังไม่รองรับ tune=True)
+    engine : {"auto", "hyperplane", "rpforest"}
+        "hyperplane" — global random hyperplanes + median (single-matmul);
+        "rpforest" — balanced rpTree forest: ทิศสุ่มต่อ node + median ท้องถิ่น →
+        bucket ขนาดเท่ากันโดยโครงสร้าง (ฆ่า mega-bucket — วัดจริง PU: fraud 0.3%
+        +39%, home-credit natural +6% เทียบ hyperplane+hier; fit แพงกว่า ~2-4x,
+        depth <= 12 ใน tuner); "auto" (default) — tune=True ให้ tuner ประเมินทั้ง
+        สอง engine แล้วเลือกจาก OOF, tune=False = "hyperplane"
     hier_depths : None | "auto" | sequence[int]
         hierarchical shrinkage ข้าม prefix depths (score_type="lift" เท่านั้น):
         "auto" = (4, 6, ..., n_bits) — bucket ลึกที่หลักฐานบาง inherit lift ของ
@@ -99,17 +100,12 @@ class LeadX:
                  strategy="unsupervised", weights="mean", grid=None,
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
                  hash_mode="median", cat_bit_frac="auto", whiten=False,
-                 hier_depths=None, engine="hyperplane",
+                 hier_depths=None, engine="auto",
                  chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
-        if engine not in ("hyperplane", "rpforest"):
+        if engine not in ("auto", "hyperplane", "rpforest"):
             raise ValueError(f"engine ไม่รู้จัก: {engine}")
-        if engine == "rpforest" and tune:
-            raise ValueError(
-                "engine='rpforest' ยังไม่รองรับ tune=True (tuner ทำ prefix masking "
-                "บน bank) — ใช้ tune=False กับ n_bits/n_tables ที่ต้องการ"
-            )
         if feature_weighting not in ("none", "corr", "contrast"):
             raise ValueError(f"feature_weighting ไม่รู้จัก: {feature_weighting}")
         self.mode = mode
@@ -176,7 +172,10 @@ class LeadX:
             # ส่ง Z ที่ *ยังไม่ถ่วงน้ำหนัก* — tuner cross-fit weights ต่อ fold เอง
             # (ปิด OOF leak: validation fold ห้ามเห็น y ตัวเองผ่าน weights — audit P0)
             Z_geom_raw = Z_bg if (self.mode == "pu" and Z_bg is not None) else Z
-            tuner = Tuner(grid=self.grid, mode=self.mode,
+            tuner_grid = dict(self.grid or {})
+            if self.engine != "auto" and "engine" not in tuner_grid:
+                tuner_grid["engine"] = [self.engine]
+            tuner = Tuner(grid=tuner_grid, mode=self.mode,
                           cat_bit_frac=self.cat_bit_frac, hash_mode=self.hash_mode,
                           whiten=self.whiten, random_state=self.random_state)
             best = tuner.tune(Z, y, Z_background=Z_bg, cat_mask=self.encoder_.cat_mask_,
@@ -184,6 +183,7 @@ class LeadX:
             self.tuning_results_ = tuner.results_
             cfg = {k: best[k] for k in ("strategy", "n_bits", "n_tables", "m", "weights",
                                         "score_type", "alpha", "agg")}
+            cfg["engine"] = best.get("engine", "hyperplane")
             fr = best.get("cat_bit_frac", str(self.cat_bit_frac))
             cfg["cat_bit_frac"] = "auto" if fr == "auto" else float(fr)
             cfg["whiten"] = bool(best.get("whiten", self.whiten))
@@ -192,7 +192,8 @@ class LeadX:
             cfg = {"strategy": self.strategy, "n_bits": self.n_bits,
                    "n_tables": self.n_tables, "m": self.m, "weights": self.weights,
                    "score_type": self.score_type, "alpha": self.alpha, "agg": self.agg,
-                   "cat_bit_frac": self.cat_bit_frac, "whiten": self.whiten}
+                   "cat_bit_frac": self.cat_bit_frac, "whiten": self.whiten,
+                   "engine": "hyperplane" if self.engine == "auto" else self.engine}
         # weights เต็ม (จาก seeds ทั้งหมด) สำหรับ deploy — คำนวณหลัง tune เพื่อไม่ leak
         # เข้าการประเมิน; ตอน deploy ใช้ข้อมูลทั้งหมดได้โดยชอบธรรม
         self.feature_weights_ = self._compute_weights(Z, y, Z_bg)
@@ -202,7 +203,18 @@ class LeadX:
                 Z_bg = Z_bg * self.feature_weights_
         Z_geom = Z_bg if (self.mode == "pu" and Z_bg is not None) else Z
         self.config_ = cfg
-        if self.tune:
+        if self.tune and cfg["engine"] == "rpforest":
+            forest = tuner.best_bank_
+            if forest is None:
+                # label-dependent winner (weighted — cross-fit ตอน tune) → refit เต็ม
+                self.hasher_ = RPForest(
+                    n_tables=cfg["n_tables"], n_bits=cfg["n_bits"],
+                    random_state=self.random_state).fit(Z_geom)
+            else:
+                # prefix ของ forest ที่ tuner ประเมินจริง — สิ่งที่ deploy = สิ่งที่วัด
+                self.hasher_ = forest.prefix(cfg["n_bits"], cfg["n_tables"])
+            proj_diag = {"engine": "rpforest"}
+        elif self.tune:
             # ใช้ prefix ของ bank ที่ Tuner ประเมินจริง — สิ่งที่ deploy = สิ่งที่วัด
             # (prefix slice ถูกต้องเพราะ codes ที่ประเมิน = mask_codes ของ bank นี้เอง)
             bank = tuner.best_bank_
@@ -226,7 +238,7 @@ class LeadX:
                 self.hasher_ = HashEnsemble(P, thr)
                 # diagnostics ต้องสะท้อน prefix ที่ deploy จริง ไม่ใช่ bank เต็มของ tuner
                 proj_diag = projection_diagnostics(P, thr, Z, strategy=cfg["strategy"])
-        elif self.engine == "rpforest":
+        elif cfg["engine"] == "rpforest":
             # local recursion: ทิศ+threshold ต่อ node → equal-mass buckets; leaf
             # codes มี prefix structure เดียวกับ bank → scorer/hier ใช้ร่วมได้หมด
             self.hasher_ = RPForest(
@@ -394,7 +406,7 @@ class LeadX:
             "pi": self._pi,
             "feature_weights": None if self.feature_weights_ is None
             else self.feature_weights_.tolist(),
-            "engine": self.engine,
+            "engine": self.config_.get("engine", self.engine),
             "hier_depths": None if hier is None else list(hier),
             "hier_pos_total": getattr(self.scorer_, "hier_pos_total_", None),
             "hier_ref_total": getattr(self.scorer_, "hier_ref_total_", None),

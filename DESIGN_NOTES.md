@@ -449,9 +449,13 @@ P2 ตัวแรกที่ลงมือ (ตามการตัดสิ
 tree path → SeedScorer/hier/mask_codes/BackgroundStats ใช้ร่วมได้ทั้งชุดไม่แก้อะไร
 
 Trade-offs ที่จดไว้: fit+transform ~2-4.5x ของ single-matmul; model size
-K×(2^b−1)×D f32 (~51MB ที่ K80 b10 D155 vs ~500KB ของ bank); ยังไม่รองรับ
-tune=True (tuner ทำ prefix masking บน bank); cat_bit_frac/whiten ไม่มีผลใน
-engine นี้; hier บน forest: ปิดประเด็นแล้วด้วย decomposition ที่ fraud 0.1% allseeds
+K×(2^b−1)×D f32 (~51MB ที่ K80 b10 D155 vs ~500KB ของ bank);
+~~ยังไม่รองรับ tune=True~~ → **tuner รองรับแล้ว**: "engine" เป็นมิติใน
+DEFAULT_GRID (forest = geometry combo เดียว จึงถูก; depth cap 12;
+`RPForest.prefix` deploy สิ่งที่วัดจริง; facade `engine="auto"` ให้ tuner
+เลือกต่อ dataset — sanity บน HC bg 40k: สอง engines ห่างกัน <2% และ tuner
+เลือก hyperplane ซึ่งสอดคล้องข้อเท็จจริงที่ forest ได้เปรียบเฉพาะบางโซน);
+cat_bit_frac/whiten ไม่มีผลใน engine นี้; hier บน forest: ปิดประเด็นแล้วด้วย decomposition ที่ fraud 0.1% allseeds
 ({engine}×{hier}×3 seeds — rpf_anomaly_raw.csv): **hier ช่วยเมื่อ seeds
 หลักสิบ, dilute เมื่อ seeds หลักร้อยบน fraud** (−10% bank, −19% rpf ที่ 203
 seeds) — anomaly ในตาราง positioning คือ confound นี้ + seed variance ไม่ใช่

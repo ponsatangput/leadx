@@ -84,8 +84,57 @@ def test_backbone_rpforest_cached_paths_and_roundtrip(tmp_path):
     np.testing.assert_allclose(s1, task2.score_cached(), rtol=1e-6)
 
 
-def test_rpforest_tune_not_supported():
-    with pytest.raises(ValueError, match="rpforest"):
-        LeadX(mode="pu", tune=True, engine="rpforest")
+def test_rpforest_engine_validation():
     with pytest.raises(ValueError, match="engine"):
         LeadX(mode="pu", tune=False, engine="rptree")
+
+
+def test_prefix_matches_masked_codes():
+    """prefix(b, k) ต้องเท่ากับ mask_codes ของ forest เต็ม — คุณสมบัติที่ tuner
+    พึ่งพา: สิ่งที่ deploy (truncated forest) = สิ่งที่วัด (masked codes)"""
+    from leadx.hashing import mask_codes
+    _, _, X = _data(n=3000)
+    Z = X.astype(np.float32)
+    f = RPForest(n_tables=5, n_bits=8, random_state=3).fit(Z)
+    c = f.transform(Z)
+    g = f.prefix(5, 3)
+    np.testing.assert_array_equal(mask_codes(c, 5, 8)[:, :3], g.transform(Z))
+    with pytest.raises(ValueError, match="เกิน"):
+        f.prefix(9, 3)
+
+
+_SMALL_GRID = {"n_bits": [4, 6], "n_tables": [4], "m": [10.0],
+               "weights": ["mean"], "strategy": ["unsupervised"],
+               "score_type": ["lift"], "alpha": [2.0], "agg": ["log"],
+               "whiten": [False], "cat_bit_frac": [0.0]}
+
+
+def test_tune_evaluates_both_engines_and_deploys(tmp_path):
+    df, y, _ = _data(n=600, seed=6)
+    clf = LeadX(mode="two_class", tune=True,
+                grid={**_SMALL_GRID, "engine": ["hyperplane", "rpforest"]},
+                random_state=0).fit(df, y)
+    assert set(clf.tuning_results_["engine"].unique().to_list()) == {
+        "hyperplane", "rpforest"}
+    assert clf.config_["engine"] in ("hyperplane", "rpforest")
+    assert clf.predict_proba(df).shape == (600, 2)
+    clf.save(tmp_path / "m")
+    p2 = LeadX.load(tmp_path / "m").predict_proba(df)
+    np.testing.assert_allclose(clf.predict_proba(df), p2, rtol=1e-6)
+
+
+def test_tune_engine_param_restricts_grid():
+    df, y, _ = _data(n=400, seed=7)
+    clf = LeadX(mode="two_class", tune=True, engine="rpforest",
+                grid=_SMALL_GRID, random_state=0).fit(df, y)
+    assert clf.config_["engine"] == "rpforest"
+    assert set(clf.tuning_results_["engine"].unique().to_list()) == {"rpforest"}
+
+
+def test_tune_rpforest_bits_over_cap_raises_when_alone():
+    from leadx.tuning import Tuner
+    with pytest.raises(ValueError, match="engine"):
+        Tuner(grid={**_SMALL_GRID, "n_bits": [16, 20],
+                    "engine": ["rpforest"]}).tune(
+            np.random.default_rng(0).normal(size=(200, 5)),
+            np.r_[np.ones(100), np.zeros(100)])
