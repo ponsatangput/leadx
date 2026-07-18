@@ -79,13 +79,15 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 ### PU learning (มีแต่ positive ที่ยืนยันแล้ว)
 
 ```python
-clf = LeadX(mode="pu", n_bits=10, n_tables=80,   # PU ชอบ bits ต่ำ + tables เยอะ
-            feature_weighting="contrast")        # +26-30% เมื่อมี background
-clf.fit(X_positive)                     # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
-scores = clf.score_samples(X_large)     # ranking score 0..1 (ไม่ใช่ probability)
+# config แนะนำสำหรับ PU: bits ต่ำ + tables เยอะ (tune=False เพราะ n_bits/n_tables
+# จะถูก tuner ทับถ้าเปิด tune; และ contrast ต้องมี background เสมอ)
+clf = LeadX(mode="pu", tune=False, n_bits=10, n_tables=80,
+            score_type="lift", agg="log", feature_weighting="contrast")
+clf.fit(X_positive, background=X_unlabeled)   # ไม่ต้องส่ง y (ถือว่า positive ทั้งหมด)
+scores = clf.score_samples(X_large)           # ranking score (lift scale)
 
-# มี background population (unlabeled) → score ดีกว่า (seed rate ต่อ bucket แทน log-density)
-clf.fit(X_positive, background=X_unlabeled)
+# หมายเหตุ: contrast/whiten เป็น dataset-specific (fraud temporal: whiten -36%!) —
+# validate กับข้อมูลของคุณก่อนใช้ (ดู DESIGN_NOTES §8)
 ```
 
 ### Noisy data (feature ที่ไม่เกี่ยวเยอะ) → เปิด feature weighting
