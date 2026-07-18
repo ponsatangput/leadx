@@ -252,6 +252,18 @@ Exact-kNN oracle gate บน home-credit PU (รายละเอียด outp
 
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
+**Two-step PU (reliable negatives + self-training)** — home-credit PU, 5 draws:
+onestep 0.1985 vs twostep_same 0.1918 / twostep_reweight 0.1902 (แพ้ 0/5 ทั้งคู่)
+**เหตุผลเชิงโครงสร้าง:** two-step ออกแบบมาสำหรับ discriminative classifiers ที่*ต้องมี*
+labeled negatives — แต่ lift ของเราเป็น density ratio ที่ใช้ background **ทั้งหมด**เป็น
+ตัวหารอยู่แล้ว (ข้อมูลมากกว่า) การแทน background ด้วย "easy negatives" (bottom 40%)
+คือการ*ตัดมวลใกล้ boundary ออกจากตัวหาร*ตรงจุดที่ resolution สำคัญที่สุด + inherit
+error ของรอบแรก → density-ratio scorer ไม่มีอะไรให้ two-step ปลดล็อค
+
+**Rank-based contrast weights** (per-feature |AUC−0.5| แทน |mean diff|):
+0.1993 vs 0.1985 — parity (4/5 แต่ +0.4% rel ต่ำกว่าทุก gate) — mean-diff เพียงพอแล้ว
+บนข้อมูลที่ standardize
+
 **Adaptive-depth scoring** (แถวเลือกความลึก prefix เองตามหลักฐาน ≥ tau):
 ไม่ช่วย (B=20: 0.918 vs fixed 0.940) — กลไก lift fallback=1 + multi-probe ทำหน้าที่
 "ถอยเมื่อหลักฐานบาง" อยู่แล้วแบบ implicit และดีกว่า (ไม่ทิ้งหลักฐาน 1-2 seeds)
