@@ -371,6 +371,10 @@ l2=0 พังที่ 0.1% ROC 0.53 ทุก random_state → เกือบ
   84→94% ของ oracle, fraud 58→69% — claim ที่ยืนได้คือ label-efficiency
 - **degrade นุ่มนวลสุด** (fraud ROC, positives หาย 30x): leadx −0.04 ≈ oracle −0.05
   << PU-naive −0.19, logreg −0.23 — invariance ของ lift โผล่บนข้อมูลจริง
+- **update หลัง rpforest (§8f)**: rerun ด้วย config ธงใหม่ — crossover ขยับ:
+  HC ชนะ PU-naive ทุก ratio ที่วัด (รวม 3%), fraud ขยับจาก 0.1% → 0.3%
+  (.0595 vs .0366); HC allseeds = 91-137% ของ oracle จูนแล้ว (**ชนะ oracle
+  ที่ 0.3%**: .0102 vs .0074) — ดู IMBALANCE_FOCUS_REPORT update section
 
 ## 8d. Hierarchical shrinkage — shipped (2026-07-18)
 

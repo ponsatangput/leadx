@@ -66,6 +66,29 @@ HistGB ทุกตัวใช้ hyperparameters ที่ audit จูน (lr
 - PR-AUC สัมบูรณ์ที่ 0.1% ต่ำทุกโมเดล (base rate 0.001) — ตัวชี้วัดใช้งานจริงคือ
   lift@0.1% (คิว investigation): leadx 46–57x ด้วย 20 seeds
 
+## Update: rerun ด้วย engine="rpforest" (หลัง §8f — config ธงใหม่)
+
+เงื่อนไขเดิมทุกอย่าง (draw seeds เดียวกัน) เปลี่ยนแค่ leadx → rpforest+hier
+(raw: imbalance_focus_rpf_raw.csv):
+
+| cell | bank 10% | **rpf 10%** | PU-naive | ผลที่เปลี่ยน |
+|---|---|---|---|---|
+| fraud 0.3% | .0235 | **.0595** | .0366 | เดิมแพ้ PU-naive → **ชนะ 1.6x**; lift@0.1% 83x vs 61x |
+| fraud 0.1% | .0086 | **.0112** | .0025 | ชนะเดิม → ชนะขาดขึ้น (4.5x, ROC .756) |
+| fraud 3%/1% | .266/.110 | .267/.125 | .378/.175 | ยังแพ้ (positives พอให้ trees) |
+| HC 3% | .0711 | **.0784** | .0737 | เดิมแพ้นิด → **ชนะ** |
+| HC 1% | .0212 | **.0245** | .0183 | ชนะกว้างขึ้น |
+| HC 0.3% | .0047 | **.0066** | .0035 | ชนะกว้างขึ้น |
+
+**Crossover ที่ข้อมูลเท่ากันขยับ**: home-credit — ชนะ PU-naive **ทุก ratio ที่วัด**
+(รวม 3%); fraud — จุดตัดขยับจาก ~0.1% เป็น **0.3%**
+
+**vs oracle label เต็ม (allseeds)**: HC = 91% / 95% / **137%** ของ oracle
+(3% / 1% / 0.3%) — ที่ 0.3% **ชนะ oracle ที่จูนแล้ว** (.0102 vs .0074; เกิน
+max ของ oracle ทุก random_state ที่วัดไว้ .0043-.0088) — claim "ชนะ oracle"
+ที่เคยถอนกลับมาแบบชอบธรรมในโซนแคบ; fraud allseeds 0.1% ต่ำกว่า bank
+(.029 vs .044 — single fit, จดไว้เป็น anomaly ยังไม่อธิบาย)
+
 ## Reproduce
 
 ```bash

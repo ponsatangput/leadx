@@ -42,7 +42,7 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 | ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — model คือ dict lookup |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
 | **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
-| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **เมื่อไม่มี labeled negatives (PU)** — ที่ข้อมูลเท่ากัน leadx ชนะ HistGB PU-naive ชัดบนข้อมูลจริง: fraud 0.1% ชนะ 3.5x PR / lift@0.1% 57x vs 11x, home-credit ชนะตั้งแต่ 1% ลงไป และ degrade นุ่มนวลสุด (ROC −0.04 เมื่อ positives หาย 30 เท่า vs PU-naive −0.19) — แต่ถ้ามี **label เต็ม** HistGB จูนแล้วยังนำทุก ratio (outputs/IMBALANCE_FOCUS_REPORT.md) |
+| **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **เมื่อไม่มี labeled negatives (PU)** — ด้วย `engine="rpforest"`: home-credit ชนะ HistGB PU-naive **ทุก ratio ที่วัด** (ถึง 3%), fraud ชนะตั้งแต่ 0.3% ลงไป (1.6x PR, lift@0.1% 83x vs 61x) และ degrade นุ่มนวลสุด (ROC −0.04 เมื่อ positives หาย 30 เท่า vs PU-naive −0.19); เทียบ **oracle label เต็มจูนแล้ว**: 91-95% ที่ 3-1% และ**ชนะที่ 0.3%** (home-credit) — fraud ปานกลาง (>=1%) ที่ seeds หลักร้อย PU-naive ยังนำ (outputs/IMBALANCE_FOCUS_REPORT.md) |
 | **imbalanced ปานกลาง** (1–10%) ที่มี labeled negatives | ❌ **ไม่** — boosting ยังชนะ (PR-AUC สูงกว่า) |
 
 รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
