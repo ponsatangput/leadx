@@ -3,6 +3,34 @@ import numpy as np
 import polars as pl
 
 
+class BackgroundStats:
+    """สถิติ background ต่อ (n_bits, n_tables[, hier_depths]) — task-independent
+
+    การ fit PU scorer ต้อง group-by background ทุกครั้ง (แพงสุดใน fit_task ที่
+    scale ใหญ่ ทั้งที่ผลเหมือนกันทุกโจทย์) — คำนวณครั้งเดียวที่นี่แล้ว reuse:
+    backbone memoize ต่อ (b, k, depths) ให้อัตโนมัติเมื่อ background="cached"
+    """
+
+    def __init__(self, codes: np.ndarray, n_bits: int, hier_depths=None):
+        codes = np.asarray(codes, dtype=np.uint64)
+        self.n_bits = n_bits
+        self.n_tables = codes.shape[1]
+        self.n_total = float(codes.shape[0])
+        self.hier_depths = hier_depths
+        self.tables = [
+            pl.DataFrame({"code": codes[:, k]})
+            .group_by("code").agg(n_total=pl.len().cast(pl.Float64))
+            for k in range(self.n_tables)
+        ]
+        self.hier = None
+        if hier_depths:
+            self.hier = [
+                [np.unique(codes[:, k] >> np.uint64(n_bits - d), return_counts=True)
+                 for d in hier_depths]
+                for k in range(self.n_tables)
+            ]
+
+
 def resolve_hier_depths(hier_depths, n_bits: int):
     """แปลงค่าจากผู้ใช้เป็น tuple depths: None → None, "auto" → (4, 6, ..., n_bits)"""
     if hier_depths is None:
@@ -115,7 +143,8 @@ class SeedScorer:
         self.alpha = alpha
         self.agg = agg
 
-    def fit(self, codes: np.ndarray, y: np.ndarray, background_codes=None) -> "SeedScorer":
+    def fit(self, codes: np.ndarray, y: np.ndarray, background_codes=None,
+            background_stats: "BackgroundStats | None" = None) -> "SeedScorer":
         codes = np.asarray(codes, dtype=np.uint64)
         y = np.asarray(y, dtype=np.float64)
         self.n_tables_ = codes.shape[1]
@@ -143,12 +172,22 @@ class SeedScorer:
                         / (pl.col("n_total") + self.m)
                     )
                 self.tables_.append(g.select("code", "score", "n_total"))
-        elif background_codes is not None:
+        elif background_codes is not None or background_stats is not None:
             # PU + background (reference ตรึงตอน fit): prop = smoothed seed rate,
             # lift = smoothed density ratio เทียบ background
-            background_codes = np.asarray(background_codes, dtype=np.uint64)
+            # background_stats = สถิติ bg ที่ precompute (task-independent) —
+            # ข้าม group-by ประชากรทั้งก้อนซ้ำทุกโจทย์ (คอขวดของ fit_task ที่ scale)
+            if background_stats is not None:
+                if background_stats.n_tables < self.n_tables_:
+                    raise ValueError(
+                        f"background_stats มี {background_stats.n_tables} tables "
+                        f"< codes ({self.n_tables_})"
+                    )
+                n_bg_total = background_stats.n_total
+            else:
+                background_codes = np.asarray(background_codes, dtype=np.uint64)
+                n_bg_total = float(background_codes.shape[0])
             n_seed_total = float(codes.shape[0])
-            n_bg_total = float(background_codes.shape[0])
             rho = n_seed_total / n_bg_total
             self.prior_ = 1.0 if self.score_type == "lift" else float(rho)
             for k in range(self.n_tables_):
@@ -157,6 +196,7 @@ class SeedScorer:
                     .group_by("code").agg(n_seed=pl.len().cast(pl.Float64))
                 )
                 bg_g = (
+                    background_stats.tables[k] if background_stats is not None else
                     pl.DataFrame({"code": background_codes[:, k]})
                     .group_by("code").agg(n_total=pl.len().cast(pl.Float64))
                 )
@@ -195,24 +235,39 @@ class SeedScorer:
                 )
                 self.tables_.append(g.select("code", "score", "n_total"))
         if self.hier_depths is not None:
-            self._fit_hier(codes, y, background_codes)
+            self._fit_hier(codes, y, background_codes, background_stats)
         return self
 
-    def _fit_hier(self, codes, y, background_codes):
+    def _fit_hier(self, codes, y, background_codes, background_stats=None):
         """เก็บตารางนับ (n_pos, n_ref) ต่อ (table, depth) เป็น numpy lookup"""
+        ref_codes = None
         if self.mode == "two_class":
             pos_codes, ref_codes = codes[y == 1.0], codes
+        elif background_stats is not None:
+            if (background_stats.hier is None
+                    or tuple(background_stats.hier_depths) != self.hier_depths
+                    or background_stats.n_bits != self.n_bits):
+                raise ValueError(
+                    "background_stats ไม่มี hier stats ที่ตรง (hier_depths, n_bits) "
+                    f"ของ scorer: stats=({background_stats.hier_depths}, "
+                    f"{background_stats.n_bits}) vs ({self.hier_depths}, {self.n_bits})"
+                )
+            pos_codes = codes
         else:
             pos_codes, ref_codes = codes, background_codes  # lift+pu มี bg การันตีแล้ว
         self.hier_pos_total_ = float(pos_codes.shape[0])
-        self.hier_ref_total_ = float(ref_codes.shape[0])
+        self.hier_ref_total_ = (background_stats.n_total if ref_codes is None
+                                else float(ref_codes.shape[0]))
         self.hier_tables_ = []
         for k in range(self.n_tables_):
             per_depth = []
-            for d in self.hier_depths:
+            for i, d in enumerate(self.hier_depths):
                 sh = np.uint64(self.n_bits - d)
                 pu_, pc_ = np.unique(pos_codes[:, k] >> sh, return_counts=True)
-                ru_, rc_ = np.unique(ref_codes[:, k] >> sh, return_counts=True)
+                if ref_codes is None:
+                    ru_, rc_ = background_stats.hier[k][i]
+                else:
+                    ru_, rc_ = np.unique(ref_codes[:, k] >> sh, return_counts=True)
                 per_depth.append((pu_, pc_.astype(np.float64),
                                   ru_, rc_.astype(np.float64)))
             self.hier_tables_.append(per_depth)

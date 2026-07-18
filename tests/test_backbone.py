@@ -185,3 +185,52 @@ def test_backbone_legacy_inference_era1_origin(tmp_path):
     loaded = LeadXBackbone.load(tmp_path / "bb")
     assert loaded.hash_mode == "origin"
     np.testing.assert_allclose(loaded.fit_task(y).predict_proba(df), expected, rtol=1e-6)
+
+
+def test_fit_task_seed_rows_and_cached_background_equivalence():
+    """seed_rows + background='cached' ต้องให้ผลเท่า path ที่ re-hash df เดิมเป๊ะ"""
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(500, 8))
+    df = pl.DataFrame({f"f{i}": X[:, i] for i in range(8)})
+    y = (X[:, 0] > 1.0).astype(float)
+    rows = np.flatnonzero(y == 1)
+    bb = LeadXBackbone(n_bits=10, n_tables=6, random_state=0).fit(df)
+    cheap = bb.fit_task(mode="pu", seed_rows=rows, background="cached",
+                        score_type="lift", agg="log")
+    rehash = bb.fit_task(mode="pu", seeds=df[rows.tolist()], background=df,
+                         score_type="lift", agg="log")
+    s_cheap = cheap.score_cached()
+    s_rehash = rehash.score_samples(df)
+    np.testing.assert_allclose(s_cheap, s_rehash, rtol=1e-6)
+    # score_cached ต้องเท่ากับ score_samples(df เดิม) ของ task เดียวกันด้วย
+    np.testing.assert_allclose(s_cheap, cheap.score_samples(df), rtol=1e-6)
+
+
+def test_fit_task_seed_rows_validation():
+    rng = np.random.default_rng(4)
+    df = pl.DataFrame({"a": rng.normal(size=100), "b": rng.normal(size=100)})
+    bb = LeadXBackbone(n_bits=8, n_tables=4, random_state=0).fit(df)
+    with pytest.raises(ValueError, match="อย่างเดียว"):
+        bb.fit_task(mode="pu", seeds=df[:5], seed_rows=[0, 1, 2])
+    with pytest.raises(ValueError, match="cached"):
+        bb.fit_task(mode="pu", seed_rows=[0, 1, 2], background="cachd")
+
+
+def test_background_stats_cache_equivalence_and_reuse():
+    """path stats cache (lift) ต้องให้ผลเท่า path bg codes เป๊ะ และ cache ถูก reuse"""
+    rng = np.random.default_rng(5)
+    X = rng.normal(size=(600, 6))
+    df = pl.DataFrame({f"f{i}": X[:, i] for i in range(6)})
+    y = (X[:, 0] + X[:, 1] > 1.5).astype(float)
+    rows = np.flatnonzero(y == 1)
+    bb = LeadXBackbone(n_bits=10, n_tables=5, random_state=0).fit(df)
+    kw = dict(mode="pu", score_type="lift", agg="log", hier_depths="auto")
+    t1 = bb.fit_task(seed_rows=rows, background="cached", **kw)
+    t2 = bb.fit_task(seeds=df[rows.tolist()], background=df, **kw)
+    np.testing.assert_allclose(t1.score_cached(), t2.score_samples(df), rtol=1e-6)
+    assert len(bb._bg_stats_cache) == 1
+    bb.fit_task(seed_rows=rows[:10], background="cached", **kw)  # โจทย์ที่สอง
+    assert len(bb._bg_stats_cache) == 1  # reuse ไม่สร้างใหม่
+    bb.fit_task(seed_rows=rows, background="cached", mode="pu",
+                score_type="lift", agg="log")  # ไม่มี hier → คนละ key
+    assert len(bb._bg_stats_cache) == 2

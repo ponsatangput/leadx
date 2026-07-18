@@ -18,8 +18,8 @@ import polars as pl
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, infer_hash_mode, mask_codes
 from .projections import ProjectionBank
-from .scoring import (SeedScorer, normalize_pu, pu_score_range,
-                      resolve_hier_depths)
+from .scoring import (BackgroundStats, SeedScorer, normalize_pu,
+                      pu_score_range, resolve_hier_depths)
 
 
 def _corr_weights(Z: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -88,6 +88,7 @@ class LeadXBackbone:
         self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
         self.diagnostics_ = bank.diagnostics()
         self._seed_codes = self.hasher_.transform(Z, chunk_size=self.chunk_size)
+        self._bg_stats_cache = {}
         return self
 
     def transform(self, df: pl.DataFrame) -> np.ndarray:
@@ -108,7 +109,7 @@ class LeadXBackbone:
 
     def fit_task(self, y=None, mode="two_class", m=10.0, weights="mean",
                  n_bits=None, n_tables=None, seeds: pl.DataFrame | None = None,
-                 background: pl.DataFrame | None = None,
+                 seed_rows=None, background=None,
                  score_type="prop", alpha=2.0, agg="mean",
                  hier_depths=None) -> "TaskModel":
         """สร้างโมเดลต่อโจทย์จาก codes ที่ cache ไว้ (ถูกมาก — แค่ group-by)
@@ -124,11 +125,20 @@ class LeadXBackbone:
         seeds : polars.DataFrame | None
             ถ้า seed อยู่นอก rows ที่ fit backbone (เช่น positive แยกใน pu) — จะ hash ให้
             ถ้า None ใช้ cached codes ของ rows ที่ fit
-        background : polars.DataFrame | None
-            pu: ประชากร unlabeled เป็น negative proxy
+        seed_rows : array-like of int | None
+            ทางเลือกแทน seeds เมื่อ seed เป็น *subset ของ rows ที่ fit backbone*:
+            ใช้ cached codes ตาม indices ตรงๆ — ไม่ต้อง re-hash เลย (path ที่ถูกสุด
+            สำหรับ PU หลายโจทย์บนประชากรเดียว)
+        background : polars.DataFrame | "cached" | None
+            pu: ประชากร unlabeled เป็น negative proxy; `"cached"` = ใช้ codes ของ
+            rows ที่ fit backbone เป็น background โดยไม่ re-hash (ประชากร = ที่ fit)
         """
         b, k = self._resolve(n_bits, n_tables)
-        if seeds is None:
+        if seeds is not None and seed_rows is not None:
+            raise ValueError("ส่งได้อย่างเดียว: seeds (hash ใหม่) หรือ seed_rows (cached)")
+        if seed_rows is not None:
+            seed_codes = self._seed_codes[np.asarray(seed_rows)]
+        elif seeds is None:
             seed_codes = self._seed_codes
         else:
             seed_codes = self.transform(seeds)
@@ -146,13 +156,30 @@ class LeadXBackbone:
             raise ValueError(
                 "two_class ต้องมี y ครบทั้งสอง class — ถ้ามีแต่ positive ใช้ mode='pu'"
             )
-        bg_codes = None
-        if background is not None:
+        hier = resolve_hier_depths(hier_depths, b)
+        bg_codes, bg_stats = None, None
+        if isinstance(background, str):
+            if background != "cached":
+                raise ValueError(f"background string รู้จักเฉพาะ 'cached' (ได้ {background!r})")
+            if score_type == "lift":
+                # สถิติ bg เป็น task-independent — memoize ต่อ (b, k, depths) แล้ว
+                # reuse ทุกโจทย์ (นี่คือหัวใจของ "โจทย์ใหม่ = ราคา group-by ของ seeds")
+                key = (b, k, hier)
+                bg_stats = self._bg_stats_cache.get(key)
+                if bg_stats is None:
+                    bg_stats = BackgroundStats(
+                        mask_codes(self._seed_codes, b, self.n_bits)[:, :k], b,
+                        hier_depths=hier)
+                    self._bg_stats_cache[key] = bg_stats
+            else:
+                # prop ต้องใช้ raw codes คำนวณ pu_score_range — ไม่ผ่าน stats cache
+                bg_codes = mask_codes(self._seed_codes, b, self.n_bits)[:, :k]
+        elif background is not None:
             bg_codes = mask_codes(self.transform(background), b, self.n_bits)[:, :k]
         scorer = SeedScorer(mode=mode, m=m, weights=weights, n_bits=b,
                             score_type=score_type, alpha=alpha, agg=agg,
-                            hier_depths=resolve_hier_depths(hier_depths, b)).fit(
-            seed_codes, y, background_codes=bg_codes)
+                            hier_depths=hier).fit(
+            seed_codes, y, background_codes=bg_codes, background_stats=bg_stats)
         # PU calibration จาก fit (batch-invariant) — lift ไม่ต้อง (สเกลตีความได้ในตัว)
         pu_lo, pu_span = (
             pu_score_range(scorer, seed_codes, bg_codes)
@@ -222,6 +249,17 @@ class TaskModel:
 
     def score_samples(self, df: pl.DataFrame) -> np.ndarray:
         s = self.scorer_.score(self._codes(df))
+        self.diagnostics_ = self.scorer_.diagnostics_
+        if self.mode == "pu" and self.score_type != "lift":
+            s = normalize_pu(s, self._pu_lo, self._pu_span)
+        return s
+
+    def score_cached(self) -> np.ndarray:
+        """score rows ที่ fit backbone จาก cached codes ตรงๆ — ไม่ re-encode/re-hash
+        (path มาตรฐานของ 'จัดอันดับประชากรเดิมด้วยโจทย์ใหม่' — ถูกกว่า score_samples มาก)"""
+        codes = mask_codes(self.backbone._seed_codes, self.n_bits,
+                           self.backbone.n_bits)[:, :self.n_tables]
+        s = self.scorer_.score(codes)
         self.diagnostics_ = self.scorer_.diagnostics_
         if self.mode == "pu" and self.score_type != "lift":
             s = normalize_pu(s, self._pu_lo, self._pu_span)

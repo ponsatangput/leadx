@@ -1,0 +1,4 @@
+n_rows,backbone_fit_s,task_fit_median_s,task_fit_max_s,score_population_s,histgb_one_task_s,roc_median,roc_min,peak_rss_gb
+1000000,9.6,0.02,2.16,3.0,10.7,0.8727,0.8638,4.6
+3000000,17.4,0.03,6.48,9.6,33.9,0.9034,0.8925,10.9
+10000000,50.8,0.04,21.12,31.2,,0.9239,0.9198,12.2
