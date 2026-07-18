@@ -37,9 +37,9 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 
 | สถานการณ์ | ใช้ leadx? |
 |---|---|
-| **PU learning** — มีแต่ positive ยืนยันแล้ว + unlabeled ไม่มี labeled negative | ✅ **ใช่** — boosting/LogReg รันไม่ได้เลย นี่คือ niche จริง |
-| **หลายโจทย์บน feature space เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวัน) | ✅ **ใช่** — `LeadXBackbone` hash ครั้งเดียว แต่ละโจทย์ ~30ms |
-| ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — model คือ dict lookup |
+| **PU learning** — มีแต่ positive ยืนยันแล้ว + unlabeled ไม่มี labeled negative | ✅ **ใช่** — supervised training ตรงๆ ใช้ไม่ได้เมื่อไม่มี labeled negatives (ใช้ได้ผ่าน PU-naive conversion หรือ PU methods — เทียบใน IMBALANCE_FOCUS_REPORT) ส่วน leadx เป็น density ratio ที่เป็น PU โดยธรรมชาติ |
+| **หลายโจทย์บน feature space เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวัน) | ✅ **ใช่** — `LeadXBackbone` hash ครั้งเดียว แต่ละโจทย์ ~30ms (task-head construction เท่านั้น — scoring ประชากรคิดแยก) |
+| ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — scoring = bucket lookup บนตารางเล็ก (hyperplane: matmul → lookup; rpforest: traverse tree ~b ชั้นก่อน lookup) |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
 | **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
 | **imbalanced สุดโต่ง** (positive < ~0.3%) | ✅ **preliminary — เมื่อไม่มี labeled negatives (PU)**: บน rarity stress test (real features, downsample positives; split เดียว, 3 seed draws) config `rpforest+hier+contrast` ที่ 10% confirmed seeds ชนะ balanced HistGB PU-naive **5/7 regimes** — home-credit ทุก ratio ที่วัด (3%–0.3%), fraud 0.3% (1.6x) และ 0.1% (ชนะ 2/3 draws, variance สูง); **แพ้ fraud 3%/1%**; degrade นุ่มนวลสุด (ROC −0.04 เมื่อ positives หาย 30 เท่า vs PU-naive −0.19); เทียบ oracle label เต็มจูนแล้ว: 91-95% ที่ 3-1% และชนะที่ HC 0.3% เฉพาะ **allseeds setting, split เดียว** (ที่ 10% seeds ยังแพ้); ยังไม่เทียบ strong PU methods จาก literature (outputs/IMBALANCE_FOCUS_REPORT.md) |
@@ -80,7 +80,8 @@ proba = clf.predict_proba(X_large)      # (n, 2) — proba[:, 1] คือ P(pos
 
 ```python
 # config ธง (opt-in — ไม่ใช่ default/auto): bits ต่ำ + tables เยอะ + rpforest + hier
-# (แม่นสุดที่วัดได้บน home-credit PU: 0.208 vs hyperplane 0.196 — DESIGN_NOTES §8f)
+# (แม่นสุดที่วัดได้บน home-credit PU: 0.208 vs hyperplane 0.196 — preliminary,
+#  วัดจาก prototype harness; ดู provenance ใน DESIGN_NOTES §8f)
 # หมายเหตุ: contrast+rpforest ทำ geometry เป็น task-specific — คนละ configuration
 # กับ reusable backbone (จุดขาย build-once/reuse) ซึ่งวัดแยกกัน ยังไม่พิสูจน์พร้อมกัน
 # ถ้าต้องการ fit เร็ว/model เล็ก/reuse: ตัด engine/hier/contrast ออก
@@ -110,7 +111,7 @@ clf.fit(X_seed, y)
 from leadx import LeadXBackbone
 
 bb = LeadXBackbone(n_bits=16, n_tables=15).fit(X)   # hash ครั้งเดียว
-churn = bb.fit_task(y_churn)                         # ~30ms ต่อโจทย์
+churn = bb.fit_task(y_churn)                         # ~30ms (task head — ไม่รวม scoring)
 fraud = bb.fit_task(y_fraud)
 churn.predict_proba(X_new)
 ```
@@ -127,7 +128,7 @@ churn.predict_proba(X_new)
 bit_j(x) = 1 if (x · p_j) > 0 else 0
 ```
 
-`B` bits ต่อกันเป็นรหัส bucket (uint64) — คู่จุดที่ทำมุม θ กันชนกัน (ได้ bit เดียวกัน) ด้วยความน่าจะเป็น `1 − θ/π` จุดใกล้กันจึงมีโอกาสสูงที่จะได้รหัสเดียวกัน
+`B` bits ต่อกันเป็นรหัส bucket (uint64) — คู่จุดที่ทำมุม θ กันชนกัน (ได้ bit เดียวกัน) ด้วยความน่าจะเป็น `1 − θ/π` จุดใกล้กันจึงมีโอกาสสูงที่จะได้รหัสเดียวกัน *(สูตรนี้เป็นของ SimHash ผ่าน origin — `hash_mode="median"` (default) เลื่อนจุดตัดตามข้อมูล พฤติกรรมใกล้เคียงแต่ไม่ exact; ส่วน `engine="rpforest"` เป็นคนละกลไก: recursive tree ที่ data-dependent ไม่มีสูตร collision รูปปิด)*
 
 ### 2. Ensemble ของ K hash tables
 
@@ -220,7 +221,7 @@ bb = LeadXBackbone(n_bits=16, n_tables=15, random_state=0).fit(X)   # แพง�
 # หรือ: .fit(X, y_ref=y_first_task) — shared feature weights: เรียน relevance จาก
 # โจทย์อ้างอิง แชร์กับทุกโจทย์ (โจทย์ที่แชร์ signal features ได้ +0.25 AUC บนข้อมูล noisy;
 # โจทย์ที่ signal คนละชุดจะแย่ลง — y_ref ต้อง represent กลุ่มโจทย์จริง)
-churn = bb.fit_task(y_churn)                    # ~30ms — คืน TaskModel
+churn = bb.fit_task(y_churn)                    # ~30ms task head — คืน TaskModel
 fraud = bb.fit_task(y_fraud)
 # PU บนประชากรเดียวกับที่ fit: seed_rows + background="cached" — ไม่ re-hash เลย
 # (สถิติ background ถูก memoize — โจทย์ที่สองเป็นต้นไป ~40ms แม้ที่ 10M แถว)
@@ -280,6 +281,17 @@ LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
       chunk_size=1_000_000, random_state=0)
 ```
 
+```python
+LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
+      strategy="unsupervised", weights="mean", grid=None,
+      feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
+      hash_mode="median", cat_bit_frac="auto", whiten=False,
+      hier_depths=None, engine="auto", chunk_size=1_000_000, random_state=0)
+```
+
+> หมายเหตุ: `strategy`, `hash_mode`, `cat_bit_frac`, `whiten` **ไม่มีผลกับ
+> `engine="rpforest"`** (forest กำหนด geometry ของตัวเองต่อ node)
+
 | method / attr | คำอธิบาย |
 |---|---|
 | `.fit(df, y=None, background=None)` | train; PU ไม่ต้องส่ง y; background สำหรับ PU |
@@ -295,7 +307,8 @@ LeadX(mode="two_class", tune=True, n_bits=16, n_tables=10, m=10.0,
 
 ```python
 LeadXBackbone(n_bits=16, n_tables=15, hash_mode="median", cat_bit_frac="auto",
-              random_state=0, chunk_size=1_000_000)
+              whiten=False, engine="hyperplane", random_state=0,
+              chunk_size=1_000_000)
 ```
 
 | method / attr | คำอธิบาย |
@@ -355,7 +368,7 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 |---|---|---|
 | bank b10K80 + contrast (baseline หลังปิด leakage) | 0.194 | — |
 | + `hier_depths` | 0.196 | +1% |
-| + `engine="rpforest"` | **0.208** | **+7% รวม** |
+| + `engine="rpforest"` | **0.208** | **+7% รวม** (preliminary — prototype harness, ดู provenance §8f) |
 
 โซน extreme imbalance ที่ข้อมูลเท่ากัน (10% seeds, ไม่มี negative label) —
 เทียบ HistGB PU-naive ที่จูนแล้ว:
@@ -423,7 +436,9 @@ backbone ล้วน (ไม่มี contrast/rpforest) — คนละ confi
 | home-credit 307k (weak signal, 122 feat) | 0.703 | 0.722 | 0.752 | −0.030 |
 
 - **PU บนข้อมูลจริง (home-credit):** เห็น positive 30% (5,923 seeds) ไม่มี negative →
-  AUC 0.643, PR-AUC 0.143 (baseline 0.083), recall@top10% 21.3% — **HistGB รันไม่ได้เลย**
+  AUC 0.643, PR-AUC 0.143 (baseline 0.083), recall@top10% 21.3% — setting ที่
+  supervised ตรงๆ ใช้ไม่ได้ (ไม่มี labeled negatives; ใช้ได้ผ่าน PU-naive conversion
+  — เทียบภายหลังใน IMBALANCE_FOCUS_REPORT)
 - **Invariance บนข้อมูลจริง:** ตรึง 789 positives, ratio 7.3%→0.35% → leadx แบนราบ
   (0.604→0.608) ตามทฤษฎี; แต่ HistGB บน weak signal ทรุดน้อย (0.712→0.700) และยังนำ —
   **crossover ขึ้นกับความชัดของ signal** ไม่ใช่กฎตายตัว
@@ -446,7 +461,7 @@ feature weighting ปิด gap ~95% ด้วยต้นทุนแทบศ�
 | | เวลา | AUC |
 |---|---|---|
 | `backbone.fit` (ครั้งเดียว) | 2.5s | — |
-| `fit_task` (ต่อโจทย์) | **36ms** | 0.94–0.97 |
+| `fit_task` (ต่อโจทย์ — task-head construction only) | **36ms** | 0.94–0.97 |
 | HistGradBoost (fit เต็มต่อโจทย์) | 1.3s | 0.996 |
 
 boosting เทรนใหม่ทั้งต้นทุกครั้งที่ y เปลี่ยน — leadx marginal cost ต่อโจทย์แทบเป็นศูนย์
@@ -463,6 +478,8 @@ LeadX (facade โจทย์เดียว)         LeadXBackbone (reuse ห�
     ├── FeatureEncoder    numeric standardize + categorical (one-hot / hashing)
     ├── ProjectionBank    คัด projection vectors ตามเกณฑ์ (unsupervised/supervised)
     ├── HashEnsemble      Z @ P → sign → bit-pack เป็น uint64 (K tables); prefix-mask
+    ├── RPForest          engine ทางเลือก: recursive tree (ทิศ+median ท้องถิ่นต่อ node)
+    │                     → leaf codes ที่ prefix = tree path (แทน ProjectionBank+HashEnsemble)
     ├── SeedScorer        bucket → score (Polars), multi-probe, PU/two-class
     └── Tuner             nested prefix-masked OOF grid search
 ```
@@ -478,7 +495,7 @@ LeadX (facade โจทย์เดียว)         LeadXBackbone (reuse ห�
 2. **Coverage collapse ในมิติสูง** — B มากไป → bucket ว่าง → miss rate พุ่ง → score หล่นเป็น prior (จัดการได้ด้วย tuner ที่เลือก B ในโซนปลอดภัย)
 3. **Seed ต้องเป็นตัวแทน distribution จริง** — score = density ratio; selection bias / covariate shift ทำให้เพี้ยน (miss rate ช่วยตรวจ shift)
 4. **Calibration** — score เป็น ranking ที่ monotone-ish ไม่ใช่ P(y|x) จริง (ดีสำหรับ AUC/AP; ถ้าต้อง probability ให้ต่อ isotonic บน OOF)
-5. **ยังไม่รองรับ** multi-class (>2), GPU/out-of-core, data-dependent projections (ITQ/PCA) — เป็นทิศทาง v2
+5. **ยังไม่รองรับ** multi-class (>2), GPU/out-of-core (data-dependent geometry มีแล้ว: `whiten` และ `engine="rpforest"`)
 
 ---
 

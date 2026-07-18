@@ -26,8 +26,10 @@ features** — รายงานนี้วัดที่ scale นั้น�
    ~31s/โจทย์** (จัดอันดับ 10M แถว)
    - เทียบ **fit-vs-fit เท่านั้น**: 20 โจทย์ = 73s vs HistGB ~2,300s (fit อย่าง
      เดียว, ~30x) — ตัวเลขนี้*ไม่รวม scoring ทั้งสองฝั่ง*
-   - เทียบ **end-to-end รวม scoring ประชากร**: 20 โจทย์ ≈ 73 + 20×31 ≈ 700s vs
-     HistGB fit+predict ≈ 2,900s+ → **~4x** — อย่าอ้าง 30x เป็น end-to-end
+   - **end-to-end รวม scoring**: LeadX 20 โจทย์ ≈ 73 + 20×31 ≈ **700s**;
+     ฝั่ง HistGB วัด/extrapolate ไว้เฉพาะ fit (~2,300s) — **เวลา predict 10M
+     ยังไม่ได้วัด จึงยังสรุปตัวคูณ end-to-end ไม่ได้** (ห้ามอ้างทั้ง 30x และ
+     ตัวเลขอื่นเป็น end-to-end จนกว่าจะวัด HistGB predict)
 2. **Linear scaling ทุก stage** (หลัง fix): backbone 9.6→17.4→50.8s,
    score 3.0→9.6→31.2s ต่อ 1M→3M→10M; peak RSS 12.2GB ที่ 10M — เครื่อง
    laptop 24GB เอาอยู่ ไม่ต้อง out-of-core ที่ scale นี้

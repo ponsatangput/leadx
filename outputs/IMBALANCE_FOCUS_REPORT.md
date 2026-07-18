@@ -19,7 +19,8 @@ seed 42/43), 3 seed draws เฉพาะโมเดลที่ขึ้นก
 HistGB ทุกตัวใช้ hyperparameters ที่ audit จูน (lr .08, iters 150, **l2=1.0**) —
 สำคัญมาก: default l2=0 ทำ oracle พังที่ 0.1% (ROC 0.53 ทุก random_state) และจะได้
 ข้อสรุปกลับด้าน fraud = temporal split; 3 draws (median); oracle เช็ค variance
-เพิ่ม 3 random_state ที่จุดสุดขั้ว (PR 0.055–0.067 ที่ 0.1% — เสถียร)
+เพิ่ม 3 random_state ที่จุดสุดขั้ว — ไม่พบ variance ผิดปกติ (spot-check แบบ
+ad-hoc **ไม่มี script/raw artifact** — อย่า cite ตัวเลขช่วงจากบรรทัดนี้)
 
 ## ผล (median PR-AUC / ROC-AUC)
 
@@ -55,8 +56,9 @@ HistGB ทุกตัวใช้ hyperparameters ที่ audit จูน (lr
    โดย update rpforest ด้านล่าง: ชนะที่ HC 0.3% เฉพาะ allseeds setting)* —
    ผลรอบแรก (oracle default l2=0 พัง)
    เป็นการชนะหุ่นฟาง แต่ gap แคบลงเมื่อ imbalance รุนแรงขึ้น: home-credit
-   allseeds = 84→94% ของ oracle (3%→0.3%); fraud = 58→69% — "ได้เกือบเท่า
-   label เต็มโดยไม่มี negative label สักตัว" คือ claim ที่ยืนได้
+   allseeds = 84→94% ของ oracle (3%→0.3%, monotonic); fraud **ไม่ monotonic**:
+   58% (3%) → 44–45% (1–0.3%) → 80% (0.1%) — "ได้เกือบเท่า label เต็มโดยไม่มี
+   negative label สักตัว" จึงยืนได้เฉพาะ home-credit และ endpoint ของ fraud
 4. **Degrade นุ่มนวลที่สุดในกลุ่มข้อมูลเท่ากัน** (fraud ROC, 3%→0.1% = positives
    หาย 30x): leadx allseeds −0.037, oracle(label เต็ม) −0.050, PU-naive −0.187,
    logreg −0.227 — คุณสมบัติ imbalance-invariant ของ lift โผล่บนข้อมูลจริง
@@ -96,7 +98,8 @@ few-seed regimes" บน fixed split เดียว ยังไม่ generali
 
 **vs oracle label เต็ม — เฉพาะ allseeds setting, split เดียว**: HC = 91% / 95% /
 **137%** ของ oracle (3% / 1% / 0.3%) — ที่ 0.3% allseeds ชนะ oracle ที่จูนแล้ว
-(.0102 vs .0074; เกิน max ของ oracle ทุก random_state ที่วัดไว้ .0043-.0088)
+(.0102 vs .0074 — oracle เป็น fit เดียว; spot-check หลาย random_state เป็น
+ad-hoc ไม่มี artifact จึงไม่ cite ช่วงตัวเลข)
 แต่ที่ **10% seeds (29 ตัว) ยังแพ้ oracle** (.0066 vs .0074) — ทุกการอ้าง
 "ชนะ oracle" ต้องติด qualifier "allseeds, one fixed split"; fraud allseeds 0.1% ต่ำกว่า bank
 (.029 vs .044) — **ปิดแล้ว**: decomposition ({engine}×{hier}×3 seeds,

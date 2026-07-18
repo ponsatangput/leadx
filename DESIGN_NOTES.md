@@ -218,7 +218,7 @@ numeric bits เพื่อให้ prefix masking เหลือทั้ง
 dilution); feature_weighting ช่วยสม่ำเสมอ (+0.006…+0.019)
 
 **PU (niche หลัก) — ยืนยัน:** home-credit เห็น positive 30% ไม่มี negative → AUC 0.643,
-recall@top10% 21.3% (สุ่ม 10%) ที่ boosting รันไม่ได้เลย
+recall@top10% 21.3% (สุ่ม 10%) ใน setting ที่ supervised ตรงๆ ใช้ไม่ได้ (ไม่มี labeled negatives — เทียบผ่าน PU-naive conversion ภายหลังใน 8c)
 
 **Invariance — ยืนยัน / crossover — ต้อง qualify:** ตรึง 789 positives แปร ratio
 7.3→0.35% → leadx แบนราบ (0.604/0.602/0.608) ตามทฤษฎี แต่ HistGB บน weak signal
@@ -324,7 +324,7 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 
 | ปัญหาที่พบ/หารือ | สิ่งที่ปรับ | ผลวัด |
 |---|---|---|
-| tune ยาก สุ่มหลายรอบแล้วลุ้น (pain point ตั้งต้น) | Tuner: nested prefix-masking, hash ครั้งเดียวทั้ง grid; final = prefix ของ bank ที่ประเมินจริง | 100+ configs ≈ ราคา 1 config |
+| tune ยาก สุ่มหลายรอบแล้วลุ้น (pain point ตั้งต้น) | Tuner: nested prefix-masking, hash ครั้งเดียวทั้ง grid; final = prefix ของ bank ที่ประเมินจริง | prefix reuse ลดต้นทุนภายใน geometry เดียวกัน (100+ scoring configs ≈ hash ชุดเดียว) — แต่ engine/strategy/whiten/label-dependent folds ยังต้องสร้าง geometry แยกของใครของมัน |
 | เส้นตัดผ่าน origin + machinery สมมุติฐานเยอะ | `hash_mode="median"` + tie-aware threshold — ลบ balance-test/resample/redundancy ทั้งชุด | fit เร็ว 15x, robust, AUC เสมอเดิม (+0.001±0.015, 25 คู่) |
 | คะแนนดิบ vs สัดส่วน (คำถาม scoring) | `score_type="lift"` — density ratio, shrink-toward-1, fallback=1, agg mean/log | imbalance-invariant: แบนราบทุก ratio, ตัด HistGB ที่ ~0.3% |
 | noise features กลบ signal | `feature_weighting="corr"` (หลัง standardize เท่านั้น) | D=200: 0.79 → 0.97 |
@@ -338,7 +338,8 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | rpforest ใช้กับ auto-tune ไม่ได้ | "engine" เป็นมิติใน tuner grid + `RPForest.prefix` + fit vectorized (−40%) + facade `engine="auto"` | tuner เลือก engine ต่อ dataset จาก OOF; deploy = prefix ที่วัดจริง (§8f) |
 
 **เส้นทางตัวเลขธง (home-credit PU 10% seeds, PR-AUC, parity ทุกจุด):**
-0.194 (baseline หลังปิด leakage) → 0.196 (+hier) → **0.208 (+rpforest; paired +5.4%, 3/3 draws — +7% รวม)**
+0.194 (baseline หลังปิด leakage) → 0.196 (+hier) → **0.208 (+rpforest; paired
++5.4%, 3/3 draws — +7% รวม; prototype harness — ดู provenance §8f)**
 — extreme cells: fraud 0.3% 0.0235→0.0595 (2.5x), HC 0.3% 0.0047→0.0066 (+42%)
 
 **Top-3 การปรับที่มีค่าที่สุด:** (1) lift scoring — เปลี่ยน positioning ด้วยคณิตศาสตร์
@@ -422,7 +423,8 @@ outputs/hier_shrinkage_experiment.py (raw CSV)
 
 **ผล (10M แถว, 24GB laptop):** backbone 51s ครั้งเดียว → โจทย์ PU ถัดไป **0.04s**
 (vs HistGB ~115s/โจทย์ + ต้อง label เต็ม — เทียบ **fit-vs-fit เท่านั้น**: 20 โจทย์
-~30x; **end-to-end รวม scoring ประชากร ~31s/โจทย์ → ~4x** — ดู breakdown ใน report);
+~30x; end-to-end: LeadX ≈700s รวม scoring แต่ HistGB predict 10M **ยังไม่ได้วัด**
+— ยังสรุปตัวคูณ end-to-end ไม่ได้);
 score ประชากร 10M = 31s; peak RSS 12.2GB; ROC ไม่เสื่อมตาม scale (ดีขึ้น:
 0.873→0.924 — background ใหญ่ = denominator นิ่ง)
 
@@ -456,6 +458,12 @@ paired per-draw ที่ระมัดระวังกว่าใต้ต�
 | home-credit 1% | .0226 | **.0245** | +8% |
 | fraud 0.1% | .0099 | .0097 | −1.6% (เสมอ — 20 seeds, signal-limited) |
 | **natural 8%** | .1964 | **.2081** | **+6% — new best home-credit PU** |
+
+**Provenance:** ตัวเลข §8f ทั้งตาราง (รวม 0.208) มาจาก **prototype class ใน
+rpforest_experiment.py** — shipped class ภายหลังถูก vectorize (RNG stream ต่าง)
+และ re-validate ผ่าน public API เฉพาะ natural cell: **0.206** (3 draws, ad-hoc
+ไม่มี raw artifact) → สถานะ = **preliminary** จนกว่าจะ rerun ครบทุก cell ผ่าน
+public API พร้อม raw ใหม่ (ส่วน imbalance_focus_rpf_raw ใช้ shipped facade แล้ว)
 
 **Gate:** ผ่านตามเกณฑ์เดิม (ratio-of-medians: 3/4 extreme + natural +6%) —
 แต่ **paired per-draw analysis** (คู่ draw เดียวกัน — วิธีที่ถูกกว่าเพราะ median
@@ -543,8 +551,10 @@ whiten/contrast ชนะทั่วไป; whiten ต้องเป็น opt
 
 ### P2 — งานวิจัย architecture (ทำเมื่อ P0/P1 ผ่านเท่านั้น)
 
-- [x] ✅ **Balanced Local Projection Forest:** วัดแล้ว **ผ่าน gate — shipped**
-  เป็น `engine="rpforest"` (ดู §8f; mega-bucket hypothesis ยืนยันบนข้อมูลจริง)
+- [x] ✅ **Balanced Local Projection Forest:** วัดแล้ว — ratio-of-medians gate
+  เดิมผ่าน แต่ **paired analysis ผ่านชัดเจน 2/4 extreme cells** → shipped เป็น
+  **regime-dependent opt-in** `engine="rpforest"` + engine dimension ใน tuner
+  (ดู §8f; mega-bucket hypothesis ยืนยันบนข้อมูลจริง)
 - [ ] **Faithful ITQ / Anchor Graph Hashing:** prototype ปัจจุบันไม่ใช่ implementation ตาม
   paper เต็ม (AGH ไม่มี graph eigensystem; ITQ ถูกบีบ PCA-10 + median). ผลลบปัจจุบันปฏิเสธ
   ได้เฉพาะ prototype ไม่ใช่ algorithm family.
