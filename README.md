@@ -1,5 +1,9 @@
 # LeadX
 
+[![PyPI](https://img.shields.io/pypi/v/leadx.svg)](https://pypi.org/project/leadx/)
+[![CI](https://github.com/ponsatangput/leadx/actions/workflows/test.yml/badge.svg)](https://github.com/ponsatangput/leadx/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Rare-event retrieval from a handful of confirmed positives** — an LSH /
 random-projection-tree ensemble with density-ratio scoring and a reusable
 hashing backbone. Pure batch operations (NumPy + Polars); validated up to

@@ -1,6 +1,11 @@
 """leadx — LSH ensemble classifier."""
+from importlib.metadata import PackageNotFoundError, version
+
 from .backbone import LeadXBackbone, TaskModel
 from .classifier import LeadX
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("leadx")
+except PackageNotFoundError:  # editable/source checkout without install metadata
+    __version__ = "0.0.0+unknown"
 __all__ = ["LeadX", "LeadXBackbone", "TaskModel"]
