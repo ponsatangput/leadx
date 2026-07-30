@@ -1,5 +1,10 @@
 # Criteo Uplift v2.1 — rare-outcome / reusable-backbone benchmark (2026-07-18)
 
+> **Newer evidence (2026-07-21):** the 5-split gate with Bagging Linear SVM
+> reduces the 20-seed PR effect to +1.8% [−8.5%, +9.3%]. Read
+> [`CRITEO_MULTISPLIT_GATE_REPORT.md`](CRITEO_MULTISPLIT_GATE_REPORT.md) first.
+> The report below is retained as the original fixed-split/scale study.
+
 ## คำตัดสิน
 
 | สมมติฐาน | ผลจากรอบนี้ |

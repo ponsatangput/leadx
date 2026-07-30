@@ -1,0 +1,264 @@
+{
+  "bagging_estimators": 30,
+  "bagging_svm_estimators": 0,
+  "bagging_svm_unlabeled_size": 0,
+  "bagging_unlabeled_size": 1000,
+  "baseline_models": [
+    "logreg_pu",
+    "bagging_logreg_pu",
+    "bagging_svm_pu"
+  ],
+  "baseline_targets": [
+    "conversion"
+  ],
+  "benchmark_script_sha256": "e6308f1aa36dd5abf0b49fb2d9e0e78c4716ef37ab29c2d9e5e29cffb782b63e",
+  "command_argv": [
+    "outputs/criteo_uplift_benchmark.py",
+    "--max-rows",
+    "1000000",
+    "--targets",
+    "conversion",
+    "--eval-split",
+    "test",
+    "--draws",
+    "10",
+    "--seed-budgets",
+    "20",
+    "--split-seeds",
+    "31001,31002,31003,31004,31005",
+    "--frozen-engines",
+    "",
+    "--task-specific-engines",
+    "rpforest",
+    "--task-specific-targets",
+    "conversion",
+    "--baseline-models",
+    "logreg_pu,bagging_logreg_pu,bagging_svm_pu",
+    "--baseline-targets",
+    "conversion",
+    "--output",
+    "outputs/criteo_uplift_multisplit_gate_raw.csv",
+    "--overwrite"
+  ],
+  "completed_unix": 1784600664.27085,
+  "created_unix": 1784599107.332621,
+  "data": "/Users/ponpiboonsatangput/jarvis/data/criteo-uplift/criteo-research-uplift-v2.1.csv.gz",
+  "draws": 10,
+  "elapsed_seconds": 1556.9382288455963,
+  "estimand": "rare-outcome retrieval; not uplift/ITE",
+  "eval_split": "test",
+  "excluded_columns": [
+    "treatment",
+    "conversion",
+    "visit",
+    "exposure"
+  ],
+  "features": [
+    "f0",
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11"
+  ],
+  "frozen_engines": [],
+  "git_revision": "4a41f82d9466185a8e604835732c2b4059f39734",
+  "leadx_source_sha256": "94aff4bc6d3ced217a1818147f988c51187b5763877a12bf2284b60ca3d3fea8",
+  "leadx_worktree_dirty": true,
+  "n_bits": 10,
+  "n_result_rows": 200,
+  "n_tables": 80,
+  "pair_key": [
+    "split_seed",
+    "draw"
+  ],
+  "population": "all",
+  "population_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "population_rows": 13979592,
+  "runtime_versions": {
+    "numpy": "2.5.1",
+    "polars": "1.42.1",
+    "python": "3.12.12",
+    "scikit_learn": "1.9.0"
+  },
+  "sample_rates": {
+    "conversion": 0.002956,
+    "exposure": 0.030825,
+    "treatment": 0.849929,
+    "visit": 0.047233
+  },
+  "sample_rows": 1000000,
+  "sample_seed": 42,
+  "sampled": true,
+  "seed_budgets": [
+    20
+  ],
+  "source_checksum_status": "matched_expected",
+  "source_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "source_rows": 13979592,
+  "source_sha256": "2716e1bf0fd157a93b5bf86924d9088419dfbac2022c6cd90030220634f616dc",
+  "split_details": {
+    "31001": {
+      "n_eval": 199748,
+      "n_train": 599776,
+      "split": {
+        "counts": {
+          "test": 199748,
+          "train": 599776,
+          "valid": 200476
+        },
+        "duplicate_row_fraction": 0.015545999999999949,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 31001,
+        "unique_feature_hashes": 984454
+      },
+      "split_rates": {
+        "test": {
+          "conversion": 0.002983759537016641
+        },
+        "train": {
+          "conversion": 0.0029327615643173453
+        },
+        "valid": {
+          "conversion": 0.0029978650811069655
+        }
+      }
+    },
+    "31002": {
+      "n_eval": 200164,
+      "n_train": 600219,
+      "split": {
+        "counts": {
+          "test": 200164,
+          "train": 600219,
+          "valid": 199617
+        },
+        "duplicate_row_fraction": 0.015545999999999949,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 31002,
+        "unique_feature_hashes": 984454
+      },
+      "split_rates": {
+        "test": {
+          "conversion": 0.003122439599528387
+        },
+        "train": {
+          "conversion": 0.002847294070997419
+        },
+        "valid": {
+          "conversion": 0.0031159670769523636
+        }
+      }
+    },
+    "31003": {
+      "n_eval": 200128,
+      "n_train": 599286,
+      "split": {
+        "counts": {
+          "test": 200128,
+          "train": 599286,
+          "valid": 200586
+        },
+        "duplicate_row_fraction": 0.015545999999999949,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 31003,
+        "unique_feature_hashes": 984454
+      },
+      "split_rates": {
+        "test": {
+          "conversion": 0.0029331228014070993
+        },
+        "train": {
+          "conversion": 0.0029218102875755484
+        },
+        "valid": {
+          "conversion": 0.0030809727498429603
+        }
+      }
+    },
+    "31004": {
+      "n_eval": 199693,
+      "n_train": 599228,
+      "split": {
+        "counts": {
+          "test": 199693,
+          "train": 599228,
+          "valid": 201079
+        },
+        "duplicate_row_fraction": 0.015545999999999949,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 31004,
+        "unique_feature_hashes": 984454
+      },
+      "split_rates": {
+        "test": {
+          "conversion": 0.0029445198379512553
+        },
+        "train": {
+          "conversion": 0.002933774790230096
+        },
+        "valid": {
+          "conversion": 0.0030336335470138604
+        }
+      }
+    },
+    "31005": {
+      "n_eval": 199492,
+      "n_train": 600792,
+      "split": {
+        "counts": {
+          "test": 199492,
+          "train": 600792,
+          "valid": 199716
+        },
+        "duplicate_row_fraction": 0.015545999999999949,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 31005,
+        "unique_feature_hashes": 984454
+      },
+      "split_rates": {
+        "test": {
+          "conversion": 0.0029875884747258036
+        },
+        "train": {
+          "conversion": 0.0029427821941703618
+        },
+        "valid": {
+          "conversion": 0.0029642091770313845
+        }
+      }
+    }
+  },
+  "split_seeds": [
+    31001,
+    31002,
+    31003,
+    31004,
+    31005
+  ],
+  "targets": [
+    "conversion"
+  ],
+  "task_specific_engines": [
+    "rpforest"
+  ],
+  "task_specific_targets": [
+    "conversion"
+  ]
+}

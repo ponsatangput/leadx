@@ -330,7 +330,7 @@ dilution ต้องมี "ความรู้เรื่อง relevance" 
 | noise features กลบ signal | `feature_weighting="corr"` (หลัง standardize เท่านั้น) | D=200: 0.79 → 0.97 |
 | one-hot ทั้ง 0/1 ตกฝั่งเดียวของ plane | `cat_bit_frac` type-aware bits + tuner เลือกสัดส่วน | cat-signal: 0.53 → 0.93; numeric ไม่ regress |
 | จูนครั้งเดียวใช้หลายโจทย์ | `LeadXBackbone` + `y_ref` shared weights | 30ms/โจทย์; related tasks +0.25 AUC |
-| bugs (batch-dependent PU, NaN, dead bits, config identity, tuner consistency) | fixes + regression tests (ปัจจุบัน 122 tests) | ทุกข้อมี test คุม |
+| bugs (batch-dependent PU, NaN, dead bits, config identity, tuner consistency) | fixes + regression tests (ปัจจุบัน 138 tests) | ทุกข้อมี test คุม |
 | audit P0: OOF leakage / benchmark↔production parity | cross-fit ต่อ fold, PU bg split, encoder fit จาก background | ตัวเลขรายงานเชื่อได้ (noise-leak bound test) |
 | variance ที่ seeds น้อยมาก (โซนธง imbalance) | `hier_depths` — EB shrink เข้าหา bucket แม่ข้าม prefix depths | +41% fraud 0.3%, +15% fraud 0.1% (§8d) |
 | scalability ที่ 10M แถว (โจทย์ตั้งต้น) | encoder preallocate f32 + `BackgroundStats` cache + `seed_rows`/`score_cached` | backbone 351s→51s; โจทย์ 2+ = 0.04s (§8e) |

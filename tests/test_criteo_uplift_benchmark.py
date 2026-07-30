@@ -22,6 +22,7 @@ SUMMARY_SPEC.loader.exec_module(SUMMARY)
 FEATURES = BENCHMARK.FEATURES
 exact_nearest_seed_score = BENCHMARK.exact_nearest_seed_score
 bagging_logreg_pu_score = BENCHMARK.bagging_logreg_pu_score
+bagging_linear_svm_pu_score = BENCHMARK.bagging_linear_svm_pu_score
 group_hash_splits = BENCHMARK.group_hash_splits
 make_seed_draws = BENCHMARK.make_seed_draws
 tie_aware_ranking_metrics = BENCHMARK.tie_aware_ranking_metrics
@@ -112,6 +113,17 @@ def test_bagging_logreg_pu_score_is_deterministic_and_finite():
     assert ((first >= 0) & (first <= 1)).all()
 
 
+def test_bagging_linear_svm_pu_score_is_deterministic_and_finite():
+    rng = np.random.default_rng(3)
+    z_train = rng.normal(size=(200, 4)).astype(np.float32)
+    z_eval = rng.normal(size=(30, 4)).astype(np.float32)
+    seeds = np.arange(20)
+    first = bagging_linear_svm_pu_score(z_train, z_eval, seeds, 3, 20, 9)[0]
+    second = bagging_linear_svm_pu_score(z_train, z_eval, seeds, 3, 20, 9)[0]
+    np.testing.assert_allclose(first, second)
+    assert np.isfinite(first).all()
+
+
 def test_summary_keeps_full_label_reference_row():
     common = {
         "target": "conversion",
@@ -176,6 +188,30 @@ def test_paired_summary_rejects_incomplete_or_duplicate_draws():
     duplicated = pl.DataFrame([*rows, rows[0]])
     with pytest.raises(ValueError, match="duplicate"):
         paired_relative_summary(duplicated, bootstrap_resamples=10)
+
+
+def test_paired_summary_treats_split_and_draw_as_joint_pair_key():
+    rows = []
+    for split_seed, leadx_value in ((1, 0.30), (2, 0.10), (3, 0.30)):
+        for draw in range(2):
+            common = {
+                "target": "conversion", "n_seeds": 20,
+                "split_seed": split_seed, "draw": draw,
+                "recall_at_0_5pct": 0.1,
+            }
+            rows.extend([
+                {**common, "model": "leadx_frozen_hyperplane",
+                 "pr_auc": leadx_value},
+                {**common, "model": "logreg_pu_naive", "pr_auc": 0.20},
+                {**common, "model": "bagging_logreg_pu", "pr_auc": 0.20},
+            ])
+    result = paired_relative_summary(
+        pl.DataFrame(rows), metrics=("pr_auc",), bootstrap_resamples=100
+    ).row(0, named=True)
+    assert result["n_splits"] == 3
+    assert result["n_draws"] == 6
+    assert result["split_wins"] == 2
+    assert np.isclose(result["paired_relative_median_pct"], 50.0)
 
 
 def test_benchmark_defaults_include_paired_summary_baselines(monkeypatch):

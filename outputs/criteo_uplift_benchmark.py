@@ -42,6 +42,7 @@ import sklearn
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.svm import LinearSVC
 
 from leadx import LeadX, LeadXBackbone
 from leadx.encoder import FeatureEncoder
@@ -315,6 +316,57 @@ def bagging_logreg_pu_score(
     return score, fit_seconds, score_seconds
 
 
+def bagging_linear_svm_pu_score(
+    z_train: np.ndarray,
+    z_eval: np.ndarray,
+    seed_rows: np.ndarray,
+    n_estimators: int,
+    unlabeled_size: int,
+    random_state: int,
+) -> tuple[np.ndarray, float, float]:
+    """Inductive Bagging-PU with linear SVM base learners.
+
+    This follows the structure of Mordelet & Vert (2014): every learner sees
+    all confirmed positives and a fresh random subsample of only the unlabeled
+    pool, then decision scores are averaged.  Their safe default K=|P| is
+    selected by the caller.  ``LinearSVC`` implements the paper's linear-kernel
+    setting without materialising a kernel matrix for the large evaluation set.
+    """
+    seed_rows = np.asarray(seed_rows, dtype=np.int64)
+    if n_estimators < 1 or unlabeled_size < 1:
+        raise ValueError("bagging SVM estimators/unlabeled_size must be positive")
+    is_seed = np.zeros(len(z_train), dtype=bool)
+    is_seed[seed_rows] = True
+    unlabeled = np.flatnonzero(~is_seed)
+    sample_size = min(int(unlabeled_size), len(unlabeled))
+    rng = np.random.default_rng(random_state)
+    models = []
+    t0 = time.perf_counter()
+    y_sub = np.concatenate([
+        np.ones(len(seed_rows), dtype=np.int8),
+        np.zeros(sample_size, dtype=np.int8),
+    ])
+    for estimator in range(n_estimators):
+        negative_rows = rng.choice(unlabeled, size=sample_size, replace=False)
+        train_rows = np.concatenate([seed_rows, negative_rows])
+        model = LinearSVC(
+            C=1.0,
+            class_weight="balanced",
+            dual="auto",
+            max_iter=5000,
+            random_state=random_state + estimator,
+        ).fit(z_train[train_rows], y_sub)
+        models.append(model)
+    fit_seconds = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    score = np.zeros(len(z_eval), dtype=np.float64)
+    for model in models:
+        score += model.decision_function(z_eval)
+    score /= len(models)
+    score_seconds = time.perf_counter() - t0
+    return score, fit_seconds, score_seconds
+
+
 class ResultWriter:
     def __init__(self, path: Path, overwrite: bool):
         self.path = path
@@ -375,6 +427,7 @@ def _base_row(
         "engine": engine,
         "n_bits": run_meta["n_bits"],
         "n_tables": run_meta["n_tables"],
+        "split_seed": run_meta["split_seed"],
         "n_seeds": n_seeds,
         "draw": draw,
         "shared_fit_seconds": 0.0,
@@ -652,6 +705,38 @@ def run_baselines(
                     )
                     del score
 
+                if "bagging_svm_pu" in models:
+                    # Mordelet--Vert recommend K=|P| as a safe default and
+                    # T=35 for K<=20, T=10 for larger K.  Explicit CLI values
+                    # override both choices for sensitivity analysis.
+                    svm_unlabeled_size = (
+                        budget if args.bagging_svm_unlabeled_size == 0
+                        else args.bagging_svm_unlabeled_size
+                    )
+                    svm_estimators = args.bagging_svm_estimators
+                    if svm_estimators == 0:
+                        svm_estimators = 35 if svm_unlabeled_size <= 20 else 10
+                    score, fit_seconds, score_seconds = bagging_linear_svm_pu_score(
+                        z_train,
+                        z_eval,
+                        rows,
+                        n_estimators=svm_estimators,
+                        unlabeled_size=svm_unlabeled_size,
+                        random_state=draw,
+                    )
+                    base = _base_row(
+                        run_meta, target, y_train[target], y_eval[target],
+                        "bagging_linear_svm_pu", "bagging_pu", "linear_svm",
+                        budget, draw,
+                    )
+                    _record(
+                        writer, base, y_eval[target], score,
+                        preprocess_seconds=preprocess,
+                        task_fit_seconds=fit_seconds,
+                        score_seconds=score_seconds,
+                    )
+                    del score
+
                 if "histgb_pu" in models:
                     t0 = time.perf_counter()
                     model = _hgb(class_weight="balanced", random_state=draw).fit(
@@ -717,8 +802,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-targets", default="conversion")
     parser.add_argument("--bagging-estimators", type=int, default=30)
     parser.add_argument("--bagging-unlabeled-size", type=int, default=1000)
+    parser.add_argument("--bagging-svm-estimators", type=int, default=0,
+                        help="0 uses paper default: 35 at K<=20, else 10")
+    parser.add_argument("--bagging-svm-unlabeled-size", type=int, default=0,
+                        help="0 uses paper default K=number of confirmed seeds")
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--split-seed", type=int, default=2025)
+    parser.add_argument("--split-seeds", default="",
+                        help="comma-separated split seeds; overrides --split-seed")
     parser.add_argument("--skip-source-check", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -736,6 +827,10 @@ def main() -> None:
     task_targets = _csv_values(args.task_specific_targets)
     baseline_models = _csv_values(args.baseline_models)
     baseline_targets = _csv_values(args.baseline_targets)
+    split_seeds = (
+        _csv_values(args.split_seeds, int) if args.split_seeds.strip()
+        else [args.split_seed]
+    )
     if not targets or not set(targets) <= {"conversion", "visit"}:
         raise ValueError("targets must be conversion and/or visit")
     for name, values in (
@@ -745,8 +840,13 @@ def main() -> None:
         ("task-specific targets", task_targets),
         ("baseline models", baseline_models),
         ("baseline targets", baseline_targets),
+        ("split seeds", split_seeds),
     ):
         _require_unique(name, values)
+    if not split_seeds:
+        raise ValueError("at least one split seed is required")
+    if args.bagging_svm_estimators < 0 or args.bagging_svm_unlabeled_size < 0:
+        raise ValueError("bagging SVM overrides must be >=0 (0 means paper default)")
     unknown_task_targets = set(task_targets) - set(targets)
     if unknown_task_targets:
         raise ValueError(f"task-specific targets not in --targets: {unknown_task_targets}")
@@ -756,7 +856,8 @@ def main() -> None:
     if not set(frozen_engines + task_engines) <= {"hyperplane", "rpforest"}:
         raise ValueError("engines must be hyperplane/rpforest")
     known_baselines = {
-        "exact_seed", "logreg_pu", "bagging_logreg_pu", "histgb_pu", "histgb_oracle"
+        "exact_seed", "logreg_pu", "bagging_logreg_pu", "bagging_svm_pu",
+        "histgb_pu", "histgb_oracle"
     }
     if not set(baseline_models) <= known_baselines:
         raise ValueError(f"unknown baseline: {set(baseline_models) - known_baselines}")
@@ -775,17 +876,7 @@ def main() -> None:
 
     started = time.time()
     frame, load_meta = load_criteo(args.data, max_rows, args.sample_seed, args.population)
-    split, split_meta = group_hash_splits(frame, args.split_seed)
-    train_mask, eval_mask = split == "train", split == args.eval_split
-    train = frame.filter(pl.Series(train_mask))
-    evaluation = frame.filter(pl.Series(eval_mask))
-    if not len(train) or not len(evaluation):
-        raise ValueError("empty train/evaluation split")
-    x_train, x_eval = train.select(FEATURES), evaluation.select(FEATURES)
-    y_train = {target: train[target].to_numpy().astype(np.int8) for target in targets}
-    y_eval = {target: evaluation[target].to_numpy().astype(np.int8) for target in targets}
-    seed_draws = make_seed_draws(y_train, targets, budgets, args.draws)
-    run_meta = {
+    common_meta = {
         **load_meta,
         "data": str(args.data.resolve()),
         "source_sha256": source_sha256,
@@ -803,12 +894,6 @@ def main() -> None:
         },
         **_git_state(Path(__file__).resolve().parents[1]),
         "eval_split": args.eval_split,
-        "split": split_meta,
-        "split_rates": {
-            name: {target: float(frame[target].to_numpy()[split == name].mean())
-                   for target in targets}
-            for name in ("train", "valid", "test")
-        },
         "features": list(FEATURES),
         "excluded_columns": list(LABELS),
         "estimand": "rare-outcome retrieval; not uplift/ITE",
@@ -824,8 +909,10 @@ def main() -> None:
         "baseline_targets": baseline_targets,
         "bagging_estimators": args.bagging_estimators,
         "bagging_unlabeled_size": args.bagging_unlabeled_size,
-        "n_train": len(train),
-        "n_eval": len(evaluation),
+        "bagging_svm_estimators": args.bagging_svm_estimators,
+        "bagging_svm_unlabeled_size": args.bagging_svm_unlabeled_size,
+        "split_seeds": split_seeds,
+        "pair_key": ["split_seed", "draw"],
         "created_unix": started,
     }
     output = args.output.resolve()
@@ -833,35 +920,85 @@ def main() -> None:
     meta_path = output.with_name(output.stem.replace("_raw", "") + "_metadata.json")
     if meta_path.exists() and not args.overwrite:
         raise FileExistsError(f"metadata exists: {meta_path}; pass --overwrite")
-    _write_json_atomic(meta_path, run_meta)
-    print("DATASET", json.dumps(run_meta, sort_keys=True), flush=True)
+    artifact_meta = {**common_meta, "split_details": {}}
+    _write_json_atomic(meta_path, artifact_meta)
 
-    for engine in frozen_engines:
-        run_frozen_engine(
-            engine, x_train, x_eval, y_train, y_eval, targets, budgets, args.draws,
-            seed_draws, args, run_meta, writer,
-        )
-    for engine in task_engines:
-        run_task_specific(
-            engine, x_train, x_eval, y_train, y_eval, task_targets, budgets, args.draws,
-            seed_draws, args, run_meta, writer,
-        )
-    if baseline_targets and baseline_models:
-        run_baselines(
-            x_train, x_eval, y_train, y_eval, baseline_targets, budgets, args.draws,
-            seed_draws, baseline_models, args, run_meta, writer,
-        )
+    for split_seed in split_seeds:
+        split, split_meta = group_hash_splits(frame, split_seed)
+        train_mask, eval_mask = split == "train", split == args.eval_split
+        train = frame.filter(pl.Series(train_mask))
+        evaluation = frame.filter(pl.Series(eval_mask))
+        if not len(train) or not len(evaluation):
+            raise ValueError(f"empty train/evaluation split for seed={split_seed}")
+        x_train, x_eval = train.select(FEATURES), evaluation.select(FEATURES)
+        y_train = {
+            target: train[target].to_numpy().astype(np.int8) for target in targets
+        }
+        y_eval = {
+            target: evaluation[target].to_numpy().astype(np.int8) for target in targets
+        }
+        seed_draws = make_seed_draws(y_train, targets, budgets, args.draws)
+        split_rates = {
+            name: {
+                target: float(frame[target].to_numpy()[split == name].mean())
+                for target in targets
+            }
+            for name in ("train", "valid", "test")
+        }
+        run_meta = {
+            **common_meta,
+            "split_seed": split_seed,
+            "split": split_meta,
+            "split_rates": split_rates,
+            "n_train": len(train),
+            "n_eval": len(evaluation),
+        }
+        artifact_meta["split_details"][str(split_seed)] = {
+            "split": split_meta,
+            "split_rates": split_rates,
+            "n_train": len(train),
+            "n_eval": len(evaluation),
+        }
+        # Preserve the legacy single-split metadata fields for old consumers.
+        if len(split_seeds) == 1:
+            artifact_meta.update({
+                "split_seed": split_seed,
+                "split": split_meta,
+                "split_rates": split_rates,
+                "n_train": len(train),
+                "n_eval": len(evaluation),
+            })
+        _write_json_atomic(meta_path, artifact_meta)
+        print("DATASET", json.dumps(run_meta, sort_keys=True), flush=True)
 
-    run_meta["completed_unix"] = time.time()
-    run_meta["elapsed_seconds"] = time.time() - started
-    run_meta["n_result_rows"] = len(writer.rows)
-    _write_json_atomic(meta_path, run_meta)
+        for engine in frozen_engines:
+            run_frozen_engine(
+                engine, x_train, x_eval, y_train, y_eval, targets, budgets,
+                args.draws, seed_draws, args, run_meta, writer,
+            )
+        for engine in task_engines:
+            run_task_specific(
+                engine, x_train, x_eval, y_train, y_eval, task_targets, budgets,
+                args.draws, seed_draws, args, run_meta, writer,
+            )
+        if baseline_targets and baseline_models:
+            run_baselines(
+                x_train, x_eval, y_train, y_eval, baseline_targets, budgets,
+                args.draws, seed_draws, baseline_models, args, run_meta, writer,
+            )
+        del train, evaluation, x_train, x_eval, y_train, y_eval, seed_draws, split
+        gc.collect()
+
+    artifact_meta["completed_unix"] = time.time()
+    artifact_meta["elapsed_seconds"] = time.time() - started
+    artifact_meta["n_result_rows"] = len(writer.rows)
+    _write_json_atomic(meta_path, artifact_meta)
     print("\n=== MEDIAN ACROSS PAIRED DRAWS ===")
     with pl.Config(tbl_rows=100, tbl_width_chars=180):
         print(_summary(writer.rows))
     print(f"\nraw -> {output}")
     print(f"metadata -> {meta_path}")
-    print(f"elapsed {run_meta['elapsed_seconds'] / 60:.1f} min")
+    print(f"elapsed {artifact_meta['elapsed_seconds'] / 60:.1f} min")
 
 
 if __name__ == "__main__":

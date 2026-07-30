@@ -1,0 +1,3 @@
+target,n_seeds,metric,model,n_pairs,n_splits,paired_relative_median_pct,hierarchical_bootstrap_lo_pct,hierarchical_bootstrap_hi_pct,wins,ties,split_wins
+conversion,20,pr_auc,leadx_contrast_rpforest,50,5,1.7772274733441007,-8.508399895961794,9.290764000359175,26,0,2
+conversion,20,recall_at_0_5pct,leadx_contrast_rpforest,50,5,3.7090168959513448,-1.0204081632653184,11.917098445595853,31,0,5

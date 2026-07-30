@@ -41,8 +41,8 @@ leadx ไม่ใช่เครื่องมือทั่วไปที�
 | **หลายโจทย์บน feature space เดียว** (multi-label, ทดลองหลายนิยาม target, re-score รายวัน) | ⚠️ **เหมาะเมื่อ task-head construction คือคอขวด** — `LeadXBackbone` hash ครั้งเดียว แต่ละโจทย์ ~30ms; scoring ยังคิดแยก และ frozen geometry ไม่ได้ชนะ accuracy อัตโนมัติ |
 | ต้อง **deploy เป็น hash table ธรรมดา** ไม่มี model server | ✅ **ใช่** — scoring = bucket lookup บนตารางเล็ก (hyperplane: matmul → lookup; rpforest: traverse tree ~b ชั้นก่อน lookup) |
 | ข้อมูล **ใหญ่มาก** ต้องการ predict latency ต่ำ + accuracy พอใช้ | ⚠️ **พิจารณา** — เร็วกว่า kNN มาก แต่ HistGradientBoosting ก็เร็วและแม่นกว่า |
-| **two-class ปกติ มี label ครบ** ที่ accuracy ทุกจุดมีค่า | ❌ **ไม่** — ใช้ gradient boosting (แม่นกว่า 2–6 AUC points) |
-| **imbalanced สุดโต่ง** (positive < ~0.3%) | ⚠️ **preliminary — few confirmed seeds สำคัญกว่า prevalence อย่างเดียว**: Criteo conversion (observed 0.292%) ที่ 20 seeds, task-specific RPForest ชนะ linear-PU envelope +20.4% paired PR (8/10); ที่ 100 seeds เหลือ +1.7% และไม่ชัด. Rarity stress test เดิมชนะ PU-naive 5/7 regimes; frozen reuse ยังไม่ใช่ accuracy moat |
+| **two-class มี label ครบและ imbalance รุนแรง** | ⚠️ ไม่เด่นที่ 1:338 หรือ 1:1,000; **preliminary crossover ที่ 1:10,000**: PR +3.3% และ Recall@0.5% +0.5 pp, ชนะ 2/3 splits แต่ interval คร่อมศูนย์; Recall@0.01% ยังแพ้ |
+| **imbalanced สุดโต่ง** (positive < ~0.3%) | ⚠️ **ยังไม่ยืนยัน**: Criteo 20 seeds เมื่อเพิ่ม Bagging-SVM และ 5 splits ใหม่ เหลือ PR +1.8% [−8.5,+9.3] และ Recall@0.5% +3.7% [−1.0,+11.9]. Rarity stress test เดิมชนะ PU-naive 5/7 regimes แต่ยังไม่มี independent-dataset confirmation; frozen reuse ยังไม่ใช่ accuracy moat |
 | **imbalanced ปานกลาง** (1–10%) ที่มี labeled negatives | ❌ **ไม่** — boosting ยังชนะ (PR-AUC สูงกว่า) |
 
 รายละเอียดตัวเลขดู [Benchmarks](#benchmarks) และเหตุผลเชิงลึกดู [Known limitations](#known-limitations--failure-modes)
@@ -358,17 +358,24 @@ leadx เปิด auto-tune, kNN/LogReg ใส่ StandardScaler:
 
 สูสีบน dataset ที่แยกได้ดี ตามหลัง tree-based 2–6 points บนข้อมูล signal กระจาย/boundary โค้ง
 
-### สถานะปัจจุบันบนข้อมูลจริง — โจทย์ธง PU + imbalance (2026-07-18)
+### สถานะปัจจุบันบนข้อมูลจริง — โจทย์ธง PU + imbalance (อัปเดต 2026-07-21)
 
-**External check — Criteo Uplift v2.1:** observed conversion rate 0.292%,
-1M-row feature-group split, test groups, 10 paired seed draws. ที่ 20 confirmed
-seeds, task-specific `contrast+rpforest` ได้ PR-AUC median .153 เทียบ Bagged-LogReg
-.128 / LogReg .124; paired กับตัวที่ดีกว่าในแต่ละ draw = **+20.4%**, ชนะ 8/10.
-ที่ 100 seeds edge เหลือ +1.7% และ interval คร่อมศูนย์. Frozen backbone สูสีกับ
-linear PU ที่ conversion/20 seeds แต่แพ้ที่ 100 seeds และแพ้บน secondary `visit`;
-task head ~0.03s แต่ end-to-end ไม่เร็วกว่า linear models บน 12 features.
-รายละเอียด protocol, caveats, raw และ full 13.98M scale replication ดู
-`outputs/CRITEO_UPLIFT_REPORT.md`.
+**External check — Criteo Uplift v2.1:** รอบแรก fixed split ให้ PR +20.4%
+เทียบ linear-PU envelope แต่รอบ gate ใหม่ใช้ 5 feature-group splits × 10 draws
+และเพิ่ม Bagging Linear SVM แล้ว เหลือ PR **+1.8% [−8.5,+9.3]**, ชนะ 26/50
+และ split median ชนะ 2/5. Recall@0.5% = **+3.7% [−1.0,+11.9]**, median เป็นบวก
+5/5 splits แต่ interval ยังคร่อมศูนย์. จึงสรุปว่า accuracy **สูสี ยังไม่ชนะ**.
+รายละเอียดใหม่ดู `outputs/CRITEO_MULTISPLIT_GATE_REPORT.md`; รายงาน fixed split,
+100-seed, frozen transfer และ full 13.98M เดิมอยู่ใน `outputs/CRITEO_UPLIFT_REPORT.md`.
+
+**Imbalance-only check:** เมื่อให้ labels positive/negative ครบเท่ากันบน Criteo
+0.3% แล้วแข่ง 5 splits, two-class RPForest แพ้ strongest supervised baseline
+ทุก split: PR −4.2% และ Recall@0.5% −3.9% แบบ paired. จึงสรุปว่า prevalence ต่ำ
+ระดับ 1:338 อย่างเดียวไม่ใช่จุดแข็ง. Stress ต่อบน 10M rows พบว่ายังแพ้ชัดที่
+1:1,000 แต่ที่ **1:10,000** เริ่ม crossover: PR +3.3% และ Recall@0.5% +0.5 pp,
+ชนะ 2/3 splits (ยัง preliminary; tight Recall@0.01% แพ้). ดู
+`outputs/CRITEO_SUPERVISED_IMBALANCE_REPORT.md` และ
+`outputs/CRITEO_ULTRA_IMBALANCE_REPORT.md`.
 
 เส้นทางตัวเลขธง **home-credit PU, seeds 10% ของ positives (~2,000), PR-AUC**
 (ทุกตัวเลขภายใต้ parity contract — ไม่มี leakage):

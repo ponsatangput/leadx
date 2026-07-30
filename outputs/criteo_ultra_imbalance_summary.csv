@@ -1,0 +1,9 @@
+target_ratio,imbalance_ratio,metric,model,n_splits,effect_unit,paired_median_effect,bootstrap_lo_pct,bootstrap_hi_pct,wins,ties
+0.001,"1:1,000",pr_auc,leadx_two_class_rpforest_corr,3,relative_pct,-14.985251494392383,-17.990272325327407,-9.696788534755395,0,0
+0.001,"1:1,000",recall_at_0_01pct,leadx_two_class_rpforest_corr,3,percentage_points,-0.7014028056112225,-0.7515030060120238,-0.600901352028042,0,0
+0.001,"1:1,000",recall_at_0_1pct,leadx_two_class_rpforest_corr,3,percentage_points,-2.354709418837675,-3.4068136272545066,-0.7010515773660492,0,0
+0.001,"1:1,000",recall_at_0_5pct,leadx_two_class_rpforest_corr,3,percentage_points,-2.10315473209815,-2.4048096192384794,-1.4028056112224463,0,0
+0.0001,"1:10,000",pr_auc,leadx_two_class_rpforest_corr,3,relative_pct,3.340596036313581,-7.12755635091159,6.168565414329441,2,0
+0.0001,"1:10,000",recall_at_0_01pct,leadx_two_class_rpforest_corr,3,percentage_points,-1.0000000000000002,-1.0050251256281406,0.0,0,1
+0.0001,"1:10,000",recall_at_0_1pct,leadx_two_class_rpforest_corr,3,percentage_points,-0.5025125628140698,-0.5025125628140698,1.5000000000000013,1,0
+0.0001,"1:10,000",recall_at_0_5pct,leadx_two_class_rpforest_corr,3,percentage_points,0.4999999999999949,-0.5025125628140725,1.0050251256281395,2,0

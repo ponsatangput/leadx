@@ -1,0 +1,7 @@
+metric,model,n_splits,paired_relative_median_pct,bootstrap_lo_pct,bootstrap_hi_pct,wins,ties
+pr_auc,leadx_two_class_hyperplane_corr,5,-11.874503388237356,-19.383700884995424,-5.895688605324134,0,0
+pr_auc,leadx_two_class_rpforest_corr,5,-4.238920526971057,-11.143951868597501,-1.6908229211057613,0,0
+recall_at_0_1pct,leadx_two_class_hyperplane_corr,5,-15.189873417721511,-21.6867469879518,1.2195121951219523,1,0
+recall_at_0_1pct,leadx_two_class_rpforest_corr,5,-5.0632911392405,-8.433734939759018,6.493506493506485,1,0
+recall_at_0_5pct,leadx_two_class_hyperplane_corr,5,-6.08695652173914,-10.878661087866103,-2.2727272727272596,0,0
+recall_at_0_5pct,leadx_two_class_rpforest_corr,5,-3.913043478260869,-8.786610878661083,-0.4545454545454519,0,0

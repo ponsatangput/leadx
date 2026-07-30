@@ -73,10 +73,10 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 
 | Situation | Use LeadX? |
 |---|---|
-| ~20 confirmed positives, millions unlabeled, need a review queue | **Preliminary yes** — on Criteo conversion (0.29% observed rate, 20 seeds) task-specific LeadX beat a linear-PU envelope by +20.4% paired PR-AUC, 8/10 draws (p=.055, one split — exploratory) |
+| ~20 confirmed positives, millions unlabeled, need a review queue | **Unconfirmed** — the original fixed-split +20.4% PR-AUC edge over linear PU shrank to **+1.8% [−8.5%, +9.3%]** against an envelope including Bagging-SVM across 5 new Criteo splits. Recall@0.5% was +3.7% [−1.0%, +11.9%] |
 | Hundreds of confirmed positives | Probably not — linear/bagged PU baselines catch up (+1.7%, CI crosses zero at 100 seeds) |
 | Many labelings over one population, task-head cost is the bottleneck | Yes (architecture) — frozen backbone gives ~ms task heads; accuracy parity with linear PU, not a win |
-| Fully labeled two-class data | No — use gradient boosting |
+| Fully labeled extreme imbalance | Usually no at 1:338 and 1:1,000. **Preliminary crossover at 1:10,000**: RPForest paired PR +3.3% and Recall@0.5% +0.5 pp, both 2/3 splits with intervals crossing zero; tight Recall@0.01% still lost |
 | Need a model that deploys as plain lookup tables | Yes — scoring is bucket lookup (rpforest adds a tree traversal) |
 
 ## What's inside
@@ -93,17 +93,25 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - **Auto-tuner**: one hash at max resolution evaluates the whole
   (bits x tables x scoring) grid via prefix masking, cross-fitted to avoid
   OOF leakage; evaluates both engines and picks per dataset.
-- **136 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
+- **138 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
   on every artifact.
 
 ## Benchmarks and evidence policy
 
 All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
 
-- [`CRITEO_UPLIFT_REPORT.md`](outputs/CRITEO_UPLIFT_REPORT.md) — external
-  check on Criteo Uplift v2.1 (13.98M rows), few-seed retrieval, paired
-  analysis, includes the negative results (frozen backbone is not an accuracy
-  moat; the edge fades at 100 seeds).
+- [`CRITEO_MULTISPLIT_GATE_REPORT.md`](outputs/CRITEO_MULTISPLIT_GATE_REPORT.md)
+  — newest Criteo gate: 5 fresh group splits, 50 paired observations, and a
+  Bagging-SVM baseline; PR accuracy parity, with an unconfirmed recall signal.
+- [`CRITEO_SUPERVISED_IMBALANCE_REPORT.md`](outputs/CRITEO_SUPERVISED_IMBALANCE_REPORT.md)
+  — isolates imbalance from label scarcity by giving every model full labels;
+  LeadX loses at the natural 1:338 ratio.
+- [`CRITEO_ULTRA_IMBALANCE_REPORT.md`](outputs/CRITEO_ULTRA_IMBALANCE_REPORT.md)
+  — 10M-row, fully-labeled stress test at 1:1,000 and 1:10,000; no edge at
+  1:1,000, preliminary PR/broad-shortlist crossover at 1:10,000.
+- [`CRITEO_UPLIFT_REPORT.md`](outputs/CRITEO_UPLIFT_REPORT.md) — original
+  fixed-split Criteo study and 13.98M-row scale replication; retained as the
+  exploratory predecessor to the multi-split gate.
 - [`IMBALANCE_FOCUS_REPORT.md`](outputs/IMBALANCE_FOCUS_REPORT.md) — rarity
   stress tests on Home Credit / IEEE Fraud vs PU-naive baselines and a
   full-label oracle.
@@ -112,15 +120,16 @@ All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
 - [`DESIGN_NOTES.md`](DESIGN_NOTES.md) — every idea that was measured and
   **rejected** (9 so far), with numbers.
 
-Known limits, stated plainly: single fixed splits so far; strong PU baselines
-(Elkan-Noto, original Bagging-PU) not yet compared; fully-labeled tuned
-gradient boosting still wins when labels are abundant; rare-event accuracy and
-frozen-backbone reuse are proven **separately**, not yet together.
+Known limits, stated plainly: Criteo now has multi-split validation but no
+independent-dataset confirmation; the Bagging-SVM paper structure is compared
+with fixed C, but exact reference/modern PU implementations are not; fully
+labeled tuned gradient boosting still wins when labels are abundant; rare-event
+accuracy and frozen-backbone reuse are proven **separately**, not together.
 
 ## Roadmap (v0.2)
 
-1. Pre-registered validation: >=2 independent datasets, multiple splits,
-   strong PU baselines.
+1. Pre-registered validation: >=2 independent datasets and modern/reference PU
+   baselines. Multi-split Criteo + Bagging-SVM is complete; its PR gate failed.
 2. Frozen-geometry accuracy: contrast weighting at scoring time
    (per-table task weights) and retrieve-then-rerank on backbone candidates.
 3. English documentation.

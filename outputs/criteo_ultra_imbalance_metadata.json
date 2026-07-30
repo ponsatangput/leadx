@@ -1,0 +1,190 @@
+{
+  "benchmark_script_sha256": "588a077517ed195e4de14aa26b135c066f864aadb88c5b3f34f311693f1ab9ea",
+  "cells": {
+    "51001:0.0001": {
+      "n_positive_test": 199,
+      "n_positive_train": 598,
+      "n_test": 1993739,
+      "n_train": 5982776,
+      "positive_rate_test": 9.98124629151559e-05,
+      "positive_rate_train": 9.995360013478693e-05,
+      "split": {
+        "counts": {
+          "test": 1999383,
+          "train": 5999813,
+          "valid": 2000804
+        },
+        "duplicate_row_fraction": 0.11955879999999997,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 51001,
+        "unique_feature_hashes": 8804412
+      }
+    },
+    "51001:0.001": {
+      "n_positive_test": 1996,
+      "n_positive_train": 5988,
+      "n_test": 1995536,
+      "n_train": 5988166,
+      "positive_rate_test": 0.0010002325189823686,
+      "positive_rate_train": 0.0009999722786576057,
+      "split": {
+        "counts": {
+          "test": 1999383,
+          "train": 5999813,
+          "valid": 2000804
+        },
+        "duplicate_row_fraction": 0.11955879999999997,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 51001,
+        "unique_feature_hashes": 8804412
+      }
+    },
+    "51002:0.0001": {
+      "n_positive_test": 199,
+      "n_positive_train": 599,
+      "n_test": 1994216,
+      "n_train": 5985304,
+      "positive_rate_test": 9.978858859822607e-05,
+      "positive_rate_train": 0.00010007845883851514,
+      "split": {
+        "counts": {
+          "test": 1999841,
+          "train": 6002302,
+          "valid": 1997857
+        },
+        "duplicate_row_fraction": 0.11955879999999997,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 51002,
+        "unique_feature_hashes": 8804412
+      }
+    },
+    "51002:0.001": {
+      "n_positive_test": 1996,
+      "n_positive_train": 5991,
+      "n_test": 1996013,
+      "n_train": 5990696,
+      "positive_rate_test": 0.0009999934870163671,
+      "positive_rate_train": 0.0010000507453557983,
+      "split": {
+        "counts": {
+          "test": 1999841,
+          "train": 6002302,
+          "valid": 1997857
+        },
+        "duplicate_row_fraction": 0.11955879999999997,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 51002,
+        "unique_feature_hashes": 8804412
+      }
+    },
+    "51003:0.0001": {
+      "n_positive_test": 200,
+      "n_positive_train": 598,
+      "n_test": 1995591,
+      "n_train": 5984559,
+      "positive_rate_test": 0.00010022093705573937,
+      "positive_rate_train": 9.992382061902975e-05,
+      "split": {
+        "counts": {
+          "test": 2001240,
+          "train": 6001512,
+          "valid": 1997248
+        },
+        "duplicate_row_fraction": 0.11955879999999997,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 51003,
+        "unique_feature_hashes": 8804412
+      }
+    },
+    "51003:0.001": {
+      "n_positive_test": 1997,
+      "n_positive_train": 5990,
+      "n_test": 1997388,
+      "n_train": 5989951,
+      "positive_rate_test": 0.000999805746304674,
+      "positive_rate_train": 0.0010000081803674186,
+      "split": {
+        "counts": {
+          "test": 2001240,
+          "train": 6001512,
+          "valid": 1997248
+        },
+        "duplicate_row_fraction": 0.11955879999999997,
+        "split_method": "feature-row hash 60/20/20; exact feature duplicates stay together",
+        "split_seed": 51003,
+        "unique_feature_hashes": 8804412
+      }
+    }
+  },
+  "command_argv": [
+    "outputs/criteo_ultra_imbalance_benchmark.py",
+    "--max-rows",
+    "10000000",
+    "--target-ratios",
+    "0.001,0.0001",
+    "--split-seeds",
+    "51001,51002,51003",
+    "--output",
+    "outputs/criteo_ultra_imbalance_raw.csv",
+    "--overwrite"
+  ],
+  "completed_unix": 1784633169.11743,
+  "created_unix": 1784632320.022517,
+  "data": "/Users/ponpiboonsatangput/jarvis/data/criteo-uplift/criteo-research-uplift-v2.1.csv.gz",
+  "elapsed_seconds": 849.0949139595032,
+  "estimand": "fully supervised ultra-rare ranking; not PU",
+  "git_revision": "4a41f82d9466185a8e604835732c2b4059f39734",
+  "leadx_source_sha256": "94aff4bc6d3ced217a1818147f988c51187b5763877a12bf2284b60ca3d3fea8",
+  "leadx_worktree_dirty": true,
+  "models": [
+    "leadx_two_class_rpforest_corr",
+    "logreg_full_balanced",
+    "histgb_full_plain",
+    "histgb_full_balanced"
+  ],
+  "n_bits": 10,
+  "n_result_rows": 24,
+  "n_tables": 80,
+  "population": "all",
+  "population_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "population_rows": 13979592,
+  "runtime_versions": {
+    "numpy": "2.5.1",
+    "polars": "1.42.1",
+    "python": "3.12.12",
+    "scikit_learn": "1.9.0"
+  },
+  "sample_rates": {
+    "conversion": 0.0029263,
+    "exposure": 0.0306597,
+    "treatment": 0.8499758,
+    "visit": 0.0469786
+  },
+  "sample_rows": 10000000,
+  "sample_seed": 42,
+  "sampled": true,
+  "source_checksum_status": "matched_expected",
+  "source_rates": {
+    "conversion": 0.002916680257907384,
+    "exposure": 0.03063122299992732,
+    "treatment": 0.8500001287591226,
+    "visit": 0.046992000911042324
+  },
+  "source_rows": 13979592,
+  "source_sha256": "2716e1bf0fd157a93b5bf86924d9088419dfbac2022c6cd90030220634f616dc",
+  "split_seeds": [
+    51001,
+    51002,
+    51003
+  ],
+  "target": "conversion",
+  "target_ratios": [
+    0.001,
+    0.0001
+  ]
+}
