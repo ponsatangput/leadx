@@ -11,6 +11,7 @@ import polars as pl
 
 from .encoder import FeatureEncoder
 from .hashing import HashEnsemble, infer_hash_mode
+from .minhash import MinHashCat
 from .projections import ProjectionBank, projection_diagnostics
 from .rpforest import RPForest
 from .scoring import SeedScorer, normalize_pu, pu_score_range, resolve_hier_depths
@@ -101,11 +102,14 @@ class LeadX:
                  feature_weighting="none", score_type="prop", alpha=2.0, agg="mean",
                  hash_mode="median", cat_bit_frac="auto", whiten=False,
                  hier_depths=None, engine="auto",
+                 cat_engine="onehot", minhash_columns=None, n_bits_cat=8,
                  chunk_size=1_000_000, random_state=0):
         if mode not in ("two_class", "pu"):
             raise ValueError(f"mode ไม่รู้จัก: {mode}")
         if engine not in ("auto", "hyperplane", "rpforest"):
             raise ValueError(f"engine ไม่รู้จัก: {engine}")
+        if cat_engine not in ("onehot", "minhash"):
+            raise ValueError(f"cat_engine ไม่รู้จัก: {cat_engine}")
         if feature_weighting not in ("none", "corr", "contrast"):
             raise ValueError(f"feature_weighting ไม่รู้จัก: {feature_weighting}")
         self.mode = mode
@@ -125,8 +129,38 @@ class LeadX:
         self.whiten = whiten
         self.hier_depths = hier_depths
         self.engine = engine
+        self.cat_engine = cat_engine
+        self.minhash_columns = minhash_columns
+        self.n_bits_cat = n_bits_cat
         self.chunk_size = chunk_size
         self.random_state = random_state
+
+    def _resolve_minhash_cols(self, df: pl.DataFrame):
+        """columns ที่ route ไป MinHash (None ถ้า cat_engine != 'minhash')"""
+        if self.cat_engine != "minhash":
+            return None
+        cols = (list(self.minhash_columns) if self.minhash_columns is not None
+                else [c for c in df.columns if not df[c].dtype.is_numeric()])
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"minhash_columns ไม่มีใน df: {missing}")
+        if not cols:
+            raise ValueError(
+                "cat_engine='minhash' แต่ไม่พบ categorical column — ระบุ "
+                "minhash_columns หรือใช้ cat_engine='onehot'"
+            )
+        return cols
+
+    def _drop_mh(self, df):
+        return df.drop(self._minhash_cols_) if self._minhash_cols_ else df
+
+    def _append_minhash(self, codes, df, chunk_size=None):
+        """ต่อ categorical MinHash tables เข้ากับ numeric codes (additive)"""
+        if self.minhash_ is None:
+            return codes
+        cat = self.minhash_.transform(df.select(self._minhash_cols_),
+                                      chunk_size=chunk_size or self.chunk_size)
+        return np.concatenate([codes, cat], axis=1)
 
     def fit(self, df: pl.DataFrame, y=None, background: pl.DataFrame | None = None):
         """Train บน seeds (ข้อมูลที่มี label)
@@ -161,13 +195,20 @@ class LeadX:
         # (projections/thresholds/whiten) fit จาก background *population*
         # (y-independent, สถิติเสถียรกว่า, vocab ครบกว่า) ไม่ใช่จาก seeds ไม่กี่ตัว —
         # ให้ production API ตรงกับ protocol ของ benchmark
+        self._minhash_cols_ = self._resolve_minhash_cols(df)
+        if self._minhash_cols_ is not None and self.tune:
+            raise ValueError(
+                "cat_engine='minhash' ยังไม่รองรับ tune=True — ใช้ tune=False "
+                "กับ n_bits/n_tables ที่ต้องการ (numeric engine ยังเลือกได้ผ่าน engine=)"
+            )
         enc_source = background if (self.mode == "pu" and background is not None) else df
-        self.encoder_ = FeatureEncoder().fit(enc_source)
-        Z = self.encoder_.transform(df)
+        # MinHash จัดการ categorical แยก — numeric engine เห็นเฉพาะ columns ที่เหลือ
+        self.encoder_ = FeatureEncoder().fit(self._drop_mh(enc_source))
+        Z = self.encoder_.transform(self._drop_mh(df))
         # feature weighting (หลัง standardize มิฉะนั้นถูก z-score หักล้าง) — แก้ noise
         # dilution: ถ่วง feature ตาม |corr กับ y| ก่อน hash. ใช้ y → codes task-specific
         # (ปิด reuse ข้ามโจทย์) จึง opt-in default "none"
-        Z_bg = self.encoder_.transform(background) if background is not None else None
+        Z_bg = self.encoder_.transform(self._drop_mh(background)) if background is not None else None
         if self.tune:
             # ส่ง Z ที่ *ยังไม่ถ่วงน้ำหนัก* — tuner cross-fit weights ต่อ fold เอง
             # (ปิด OOF leak: validation fold ห้ามเห็น y ตัวเองผ่าน weights — audit P0)
@@ -256,8 +297,15 @@ class LeadX:
                      cat_mask=self.encoder_.cat_mask_)
             self.hasher_ = HashEnsemble(bank.P_, bank.thresholds_)
             proj_diag = bank.diagnostics()
-        codes = self.hasher_.transform(Z)
-        bg_codes = self.hasher_.transform(Z_bg) if Z_bg is not None else None
+        # MinHash categorical: สร้าง hasher (y-independent seeds) แล้วต่อ tables
+        # แบบ additive เข้ากับ numeric codes — validated ว่าดีกว่า one-hot (fraud PU)
+        self.minhash_ = (
+            MinHashCat(self._minhash_cols_, cfg["n_tables"], self.n_bits_cat,
+                       random_state=self.random_state)
+            if self._minhash_cols_ is not None else None)
+        codes = self._append_minhash(self.hasher_.transform(Z), df)
+        bg_codes = (self._append_minhash(self.hasher_.transform(Z_bg), background)
+                    if Z_bg is not None else None)
         hier = resolve_hier_depths(self.hier_depths, cfg["n_bits"])
         if hier is not None and cfg["score_type"] != "lift":
             warnings.warn(
@@ -265,10 +313,16 @@ class LeadX:
                 f"shrinkage สำหรับ config นี้ (score_type={cfg['score_type']!r})"
             )
             hier = None
+        if hier is not None and self.minhash_ is not None:
+            # tables มี bit-width ผสม (numeric vs categorical) — hier/multi-probe
+            # ที่พึ่ง n_bits เดียวใช้ไม่ได้ → flat lift (validated บน fraud)
+            warnings.warn("hier_depths ใช้กับ cat_engine='minhash' ไม่ได้ (mixed "
+                          "bit-width tables) — ปิด hierarchical shrinkage")
+            hier = None
         self.scorer_ = SeedScorer(
             mode=self.mode, m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
-            hier_depths=hier,
+            hier_depths=hier, multi_probe=(self.minhash_ is None),
         ).fit(codes, y, background_codes=bg_codes)
         self._pi = float(y.mean()) if self.mode == "two_class" else None
         # PU calibration: normalize ด้วยค่าคงที่จาก fit (batch-invariant) — spec ห้าม
@@ -319,10 +373,11 @@ class LeadX:
         -------
         numpy.ndarray, shape (n,)
         """
-        Z = self.encoder_.transform(df)
+        Z = self.encoder_.transform(self._drop_mh(df))
         if self.feature_weights_ is not None:
             Z = Z * self.feature_weights_
-        codes = self.hasher_.transform(Z, chunk_size=self.chunk_size)
+        codes = self._append_minhash(
+            self.hasher_.transform(Z, chunk_size=self.chunk_size), df)
         s = self.scorer_.score(codes)
         self.diagnostics_["scoring"] = self.scorer_.diagnostics_
         if self.scorer_.diagnostics_["miss_rate_final"] > 0.30:
@@ -407,6 +462,9 @@ class LeadX:
             "feature_weights": None if self.feature_weights_ is None
             else self.feature_weights_.tolist(),
             "engine": self.config_.get("engine", self.engine),
+            "cat_engine": self.cat_engine,
+            "minhash": self.minhash_.to_dict() if self.minhash_ is not None else None,
+            "scorer_n_tables": self.scorer_.n_tables_,
             "hier_depths": None if hier is None else list(hier),
             "hier_pos_total": getattr(self.scorer_, "hier_pos_total_", None),
             "hier_ref_total": getattr(self.scorer_, "hier_ref_total_", None),
@@ -436,8 +494,12 @@ class LeadX:
             cat_bit_frac=cfg["cat_bit_frac"],
             hier_depths=meta.get("hier_depths"),
             engine=engine,
+            cat_engine=meta.get("cat_engine", "onehot"),
             chunk_size=meta["chunk_size"],
         )
+        mh = meta.get("minhash")
+        clf.minhash_ = MinHashCat.from_dict(mh) if mh is not None else None
+        clf._minhash_cols_ = mh["cat_cols"] if mh is not None else None
         clf._pi = meta.get("pi")
         clf.config_ = cfg
         clf.tuning_results_ = None
@@ -454,17 +516,20 @@ class LeadX:
         else:
             clf.hasher_ = HashEnsemble(np.load(path / "projections.npy"), thresholds)
         hier = meta.get("hier_depths")
+        # minhash mode ต่อ categorical tables เพิ่ม → scorer มี tables มากกว่า n_tables
+        n_tab = meta.get("scorer_n_tables", cfg["n_tables"])
         scorer = SeedScorer(
             mode=meta["mode"], m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
             hier_depths=None if hier is None else tuple(hier),
+            multi_probe=(clf.minhash_ is None),
         )
         all_tables = pl.read_parquet(path / "tables.parquet")
         scorer.tables_ = [
             all_tables.filter(pl.col("table") == k).drop("table")
-            for k in range(cfg["n_tables"])
+            for k in range(n_tab)
         ]
-        scorer.n_tables_ = cfg["n_tables"]
+        scorer.n_tables_ = n_tab
         scorer.prior_ = meta["prior"]
         if hier is not None:
             ht = pl.read_parquet(path / "hier_tables.parquet").sort("code")
