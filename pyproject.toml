@@ -1,6 +1,6 @@
 [project]
 name = "leadx"
-version = "0.1.2"
+version = "0.2.0"
 description = "Rare-event retrieval from a handful of confirmed positives - LSH/rpTree ensemble density-ratio scoring with a reusable hashing backbone"
 readme = "README.md"
 license = "MIT"

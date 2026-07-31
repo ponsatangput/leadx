@@ -108,7 +108,15 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - **Two code-generation engines**: global hyperplanes with tie-aware median
   thresholds (SimHash-style, single matmul) and `engine="rpforest"` — a
   balanced random-projection-tree forest (per-node random direction + local
-  median split; approximately equal-mass buckets on the fit sample).
+  median split; approximately equal-mass buckets on the fit sample). Numeric
+  and categorical are hashed by whichever engine fits and their bucket codes are
+  concatenated — the scorer is engine-agnostic, so features of any type compose.
+- **Categorical handling** (`cat_engine="minhash"`): MinHash gives Jaccard
+  locality over `{column=value}` tokens — arbitrary cardinality, no one-hot
+  blow-up, ID-like integers treated as tokens instead of z-scored. On IEEE
+  fraud (PU, 1:1,000, 5 paired draws) it beat the one-hot encoder **+56% PR-AUC
+  / +37% Recall@0.5%, 5/5 draws** — and one-hot was *hurting* vs numeric-only
+  (0/5). Preliminary (one dataset). Default `"onehot"` is unchanged.
 - **Lift scoring** with hierarchical shrinkage (`hier_depths`): sparse deep
   buckets inherit evidence from their prefix ancestors — helps most when
   seeds number in the tens.
@@ -117,7 +125,7 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - **Auto-tuner**: one hash at max resolution evaluates the whole
   (bits x tables x scoring) grid via prefix masking, cross-fitted to avoid
   OOF leakage; evaluates both engines and picks per dataset.
-- **138 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
+- **145 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
   on every artifact.
 
 ## Benchmarks and evidence policy
@@ -160,7 +168,9 @@ accuracy and frozen-backbone reuse are proven **separately**, not together.
    20-seed PR gate failed).
 2. Frozen-geometry accuracy: contrast weighting at scoring time
    (per-table task weights) and retrieve-then-rerank on backbone candidates.
-3. English documentation.
+3. Categorical handling via MinHash — **done** (`cat_engine="minhash"`),
+   validated on one dataset; needs a second dataset + backbone-reuse integration.
+4. English documentation.
 
 ## License & acknowledgments
 
