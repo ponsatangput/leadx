@@ -83,6 +83,26 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 | Fully labeled extreme imbalance | Usually no at 1:338 and 1:1,000. **Preliminary crossover at 1:10,000**: RPForest paired PR +3.3% and Recall@0.5% +0.5 pp, both 2/3 splits with intervals crossing zero; tight Recall@0.01% still lost |
 | Need a model that deploys as plain lookup tables | Yes — scoring is bucket lookup (rpforest adds a tree traversal) |
 
+## Where it fits — proven vs. hypothesis
+
+**Proven (raw-CSV backed):**
+- **Build once, reuse cheaply.** Hash a 10M-row population once, then each new
+  labeling is a ~0.04s task head — no retraining
+  ([`SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md)).
+- **Deploys as plain lookup tables** (no model server); the lift score is
+  imbalance-invariant by construction (the class prior never enters the formula).
+- The reuse win is **speed/architecture, not accuracy** — a frozen backbone sits
+  at *parity* with linear PU, not ahead of it.
+
+**Hypothesis being tested in v0.2 (not a claim yet):**
+- That LeadX gains an *accuracy* edge specifically at **extreme imbalance
+  (~1:10,000) in PU mode** with many confirmed seeds — the regime it was
+  originally built for (10–20M accounts, ~1–2k confirmed positives).
+- Today's only evidence there is **preliminary and fully-supervised** (broad
+  Recall@0.5% competitive on 2/3 Criteo splits, CI crossing zero; tight
+  Recall@0.01% still lost). **The PU version of this regime is untested** —
+  which is exactly what v0.2 measures before any positioning claim is made.
+
 ## What's inside
 
 - **Two code-generation engines**: global hyperplanes with tie-aware median
@@ -132,8 +152,12 @@ accuracy and frozen-backbone reuse are proven **separately**, not together.
 
 ## Roadmap (v0.2)
 
-1. Pre-registered validation: >=2 independent datasets and modern/reference PU
-   baselines. Multi-split Criteo + Bagging-SVM is complete; its PR gate failed.
+1. **Test the hypothesized niche** — extreme imbalance (~1:10,000) + PU +
+   scale/reuse — in **PU mode**. Today's 1:10,000 evidence is fully-supervised
+   and preliminary; the PU version matching the intended use case is untested.
+   Plus pre-registered validation on >=2 independent datasets and
+   modern/reference PU baselines (multi-split Criteo + Bagging-SVM is done; its
+   20-seed PR gate failed).
 2. Frozen-geometry accuracy: contrast weighting at scoring time
    (per-table task weights) and retrieve-then-rerank on backbone candidates.
 3. English documentation.
