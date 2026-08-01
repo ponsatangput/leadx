@@ -134,6 +134,10 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 
 All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
 
+- [`COMPLEMENTARITY_REPORT.md`](outputs/COMPLEMENTARITY_REPORT.md) — LeadX vs
+  XGBoost flag *different* transactions (overlap 0.11–0.12 at ultra imbalance);
+  a rank-average ensemble adds +21% recall@0.1% over a PU-trained XGBoost
+  (5/6 folds), but is neutral-to-harmful elsewhere.
 - [`TEMPORAL_FRAUD_REPORT.md`](outputs/TEMPORAL_FRAUD_REPORT.md) — train on the
   past, score the future (IEEE fraud, rolling windows): LeadX survives temporal
   shift and drifts less than XGBoost (+27 pp at 1:1,000, 5/6), but is *not* more
