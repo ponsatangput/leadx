@@ -82,6 +82,7 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 | Many labelings over one population, task-head cost is the bottleneck | Yes (architecture) — frozen backbone gives ~ms task heads; accuracy parity with linear PU, not a win |
 | **Ultra-extreme imbalance (~1:10,000) in PU mode** | ✅ **Measured (Criteo 10M, 3 splits×3 draws)** — tree methods collapse here: LeadX beats **XGBoost-PU +325% PR / +208% Recall@0.5% (9/9)**, and beats XGBoost with *full labels* +240% PR (9/9). But **ties a strong linear-PU baseline** (LogReg slightly better on PR) — LeadX is top-tier, not uniquely best. Edge is ultra-specific (gone by 1:1,000). One dataset |
 | Fully labeled extreme imbalance (supervised) | Usually no at 1:338 and 1:1,000; preliminary crossover at 1:10,000 (see reports) |
+| Scoring a *future* window (weekly fraud queues) | ⚠️ **Measured once** — LeadX doesn't collapse across a time boundary and degrades less than XGBoost at 1:1,000 (+27 pp, 5/6 folds), but a linear PU baseline is equally drift-robust; one dataset, high variance ([`TEMPORAL_FRAUD_REPORT.md`](outputs/TEMPORAL_FRAUD_REPORT.md)) |
 | Need a model that deploys as plain lookup tables | Yes — scoring is bucket lookup (rpforest adds a tree traversal) |
 
 ## Where it fits — proven vs. hypothesis
@@ -133,6 +134,10 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 
 All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
 
+- [`TEMPORAL_FRAUD_REPORT.md`](outputs/TEMPORAL_FRAUD_REPORT.md) — train on the
+  past, score the future (IEEE fraud, rolling windows): LeadX survives temporal
+  shift and drifts less than XGBoost (+27 pp at 1:1,000, 5/6), but is *not* more
+  drift-robust than a linear PU baseline.
 - [`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md) — 1:10,000 PU
   (production regime): trees collapse, LeadX beats XGBoost 9/9, ties linear-PU.
 - [`CATEGORICAL_MINHASH_REPORT.md`](outputs/CATEGORICAL_MINHASH_REPORT.md) —
