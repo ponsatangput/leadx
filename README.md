@@ -80,7 +80,8 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 | ~20 confirmed positives, millions unlabeled, need a review queue | **Unconfirmed** — the original fixed-split +20.4% PR-AUC edge over linear PU shrank to **+1.8% [−8.5%, +9.3%]** against an envelope including Bagging-SVM across 5 new Criteo splits. Recall@0.5% was +3.7% [−1.0%, +11.9%] |
 | Hundreds of confirmed positives | Probably not — linear/bagged PU baselines catch up (+1.7%, CI crosses zero at 100 seeds) |
 | Many labelings over one population, task-head cost is the bottleneck | Yes (architecture) — frozen backbone gives ~ms task heads; accuracy parity with linear PU, not a win |
-| Fully labeled extreme imbalance | Usually no at 1:338 and 1:1,000. **Preliminary crossover at 1:10,000**: RPForest paired PR +3.3% and Recall@0.5% +0.5 pp, both 2/3 splits with intervals crossing zero; tight Recall@0.01% still lost |
+| **Ultra-extreme imbalance (~1:10,000) in PU mode** | ✅ **Measured (Criteo 10M, 3 splits×3 draws)** — tree methods collapse here: LeadX beats **XGBoost-PU +325% PR / +208% Recall@0.5% (9/9)**, and beats XGBoost with *full labels* +240% PR (9/9). But **ties a strong linear-PU baseline** (LogReg slightly better on PR) — LeadX is top-tier, not uniquely best. Edge is ultra-specific (gone by 1:1,000). One dataset |
+| Fully labeled extreme imbalance (supervised) | Usually no at 1:338 and 1:1,000; preliminary crossover at 1:10,000 (see reports) |
 | Need a model that deploys as plain lookup tables | Yes — scoring is bucket lookup (rpforest adds a tree traversal) |
 
 ## Where it fits — proven vs. hypothesis
@@ -94,14 +95,14 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - The reuse win is **speed/architecture, not accuracy** — a frozen backbone sits
   at *parity* with linear PU, not ahead of it.
 
-**Hypothesis being tested in v0.2 (not a claim yet):**
-- That LeadX gains an *accuracy* edge specifically at **extreme imbalance
-  (~1:10,000) in PU mode** with many confirmed seeds — the regime it was
-  originally built for (10–20M accounts, ~1–2k confirmed positives).
-- Today's only evidence there is **preliminary and fully-supervised** (broad
-  Recall@0.5% competitive on 2/3 Criteo splits, CI crossing zero; tight
-  Recall@0.01% still lost). **The PU version of this regime is untested** —
-  which is exactly what v0.2 measures before any positioning claim is made.
+**Measured in v0.2 — the ultra-imbalance PU regime:**
+- At **~1:10,000 in PU mode** (Criteo 10M, 3 splits × 3 draws), gradient-boosted
+  **trees collapse**: LeadX beats XGBoost-PU **+325% PR-AUC / +208% Recall@0.5%
+  (9/9)**, and beats XGBoost with *full labels* +240% PR (9/9).
+- Honest limit: LeadX **ties a strong linear-PU baseline** (LogReg is slightly
+  better on PR) — so the differentiator here is the reuse/scale architecture on
+  top of top-tier accuracy, not accuracy alone. Edge is ultra-specific (gone by
+  1:1,000). One dataset ([`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md)).
 
 ## What's inside
 
@@ -132,6 +133,11 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 
 All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
 
+- [`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md) — 1:10,000 PU
+  (production regime): trees collapse, LeadX beats XGBoost 9/9, ties linear-PU.
+- [`CATEGORICAL_MINHASH_REPORT.md`](outputs/CATEGORICAL_MINHASH_REPORT.md) —
+  MinHash categorical handling beats one-hot +56% (5/5) on IEEE fraud.
+
 - [`CRITEO_MULTISPLIT_GATE_REPORT.md`](outputs/CRITEO_MULTISPLIT_GATE_REPORT.md)
   — newest Criteo gate: 5 fresh group splits, 50 paired observations, and a
   Bagging-SVM baseline; PR accuracy parity, with an unconfirmed recall signal.
@@ -160,12 +166,10 @@ accuracy and frozen-backbone reuse are proven **separately**, not together.
 
 ## Roadmap (v0.2)
 
-1. **Test the hypothesized niche** — extreme imbalance (~1:10,000) + PU +
-   scale/reuse — in **PU mode**. Today's 1:10,000 evidence is fully-supervised
-   and preliminary; the PU version matching the intended use case is untested.
-   Plus pre-registered validation on >=2 independent datasets and
-   modern/reference PU baselines (multi-split Criteo + Bagging-SVM is done; its
-   20-seed PR gate failed).
+1. **Ultra-imbalance PU niche** — **measured** (1:10,000, Criteo 10M): beats
+   XGBoost 9/9, ties linear-PU ([`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md)).
+   Still needed: >=2 independent datasets, and a specialised PU baseline (not
+   just naive unlabeled-as-negative).
 2. Frozen-geometry accuracy: contrast weighting at scoring time
    (per-table task weights) and retrieve-then-rerank on backbone candidates.
 3. Categorical handling via MinHash — **done** (`cat_engine="minhash"`),
