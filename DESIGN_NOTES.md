@@ -302,6 +302,29 @@ random draw เดียวกัน): ชนะ 1/4 cells (fraud 0.1% +32%) แ
 dataset-specific) และ split แบบ ~balanced จัดการ density แล้ว การปรับ*ทิศ*ตาม
 variance ไม่เพิ่มอะไร (raw: rpf_cov_raw.csv)
 
+**MI feature weighting** (แทน `contrast` ที่เป็น first moment ด้วย mutual
+information ระหว่าง feature กับ is-seed — จับความต่างของ distribution ทุกแบบ,
+PU-native; + variant ที่มี soft mRMR redundancy penalty). IEEE fraud temporal
+1:1,000, 3 folds × 2 draws, มี/ไม่มี +60 noise features:
+
+| paired vs contrast | PR | R@0.5% | R@0.1% |
+|---|---|---|---|
+| no noise: mi | +14.3% (5/6) | −2.9% (1/6) | +11.7% (4/6) |
+| +60 noise: mi | −4.8% (2/6) | 0.0% (2/6) | +17.1% (4/6) |
+
+**ผล: ปฏิเสธ** — gate ที่ล็อกไว้ (mi ชนะ contrast บน R@0.5% ในสนาม +noise,
+median>0 และ ≥4/6) ได้ median 0.0%, 2/6 = ตก; mi_mrmr ≈ mi ไม่เพิ่มอะไร
+(รอบแรก mrmr พังเพราะ NaN จาก corrcoef บนคอลัมน์คงที่ใน subsample — บั๊ก ไม่ใช่ผล)
+**lead ที่เหลือไว้**: R@0.1% mi ชนะทั้งสองสนาม (4/6 ทั้งคู่) — สอดคล้องทฤษฎีว่า
+ช่วยที่ shortlist แคบสุด แต่หลักฐานอ่อนและไม่ใช่ primary metric
+
+**ผลพลอยได้ที่มีค่ากว่า — weighting คุ้มเฉพาะเมื่อ feature ไม่สะอาด:**
+`none` vs `contrast` → ไม่มี noise: none **ชนะ** PR +22.8% (5/6); มี noise:
+none **แพ้ยับ** PR −33.5%, R@0.1% −20% (0/6) → feature selection กับ feature
+weighting ทดแทนกันบางส่วน "คัด top-N แล้วเปิด contrast ทับ" ไม่ใช่คำตอบอัตโนมัติ
+ต้องวัดบน feature set จริง (raw: outputs/mi_weighting_raw.csv,
+MI_WEIGHTING_REPORT.md)
+
 **บทสรุปเชิงทิศทาง:** หลัก "localize + กระจายดี" ถูกดูดซับเกือบหมดแล้วผ่าน tie-aware
 median (กระจาย/bit) + K tables + lift/log (locality) + fallback=1/multi-probe (adaptive
 resolution โดยพฤตินัย) — คานงัดที่เหลือ: rpTree hierarchical partition (balance โดยประมาณบน fit sample

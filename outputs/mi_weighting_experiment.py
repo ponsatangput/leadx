@@ -99,6 +99,9 @@ def mi_weights(Z: np.ndarray, seed_rows: np.ndarray, n_bins=8, rng=None,
     if redundancy_lambda:
         idx = rng.permutation(n)[:20_000]
         C = np.abs(np.corrcoef(Z[idx].T))
+        # คอลัมน์ที่ค่าคงที่ใน subsample -> corrcoef = NaN -> แพร่จน weights พังทั้งชุด
+        # (บั๊กที่เจอในรอบแรก: recall = 0.000 เป๊ะ) — ถือว่า "ไม่มีข้อมูล correlation"
+        C = np.nan_to_num(C, nan=0.0, posinf=0.0, neginf=0.0)
         np.fill_diagonal(C, 0.0)
         denom = max(w.sum(), 1e-12)
         r = (C @ w) / denom                               # w-weighted redundancy
