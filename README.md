@@ -134,6 +134,11 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 
 All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
 
+- [`COMBINER_REPORT.md`](outputs/COMBINER_REPORT.md) — how to spend one review
+  budget across LeadX + XGBoost: a **cascade** (LeadX shortlists, XGBoost
+  re-ranks) beats XGBoost alone by +22.5% Recall@0.1% (6/6 folds) at 1:1,000,
+  and is the cheapest arrangement at scale. No meaningful gain at natural
+  imbalance.
 - [`COMPLEMENTARITY_REPORT.md`](outputs/COMPLEMENTARITY_REPORT.md) — LeadX vs
   XGBoost flag *different* transactions (overlap 0.11–0.12 at ultra imbalance);
   a rank-average ensemble adds +21% recall@0.1% over a PU-trained XGBoost
