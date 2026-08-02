@@ -6,3 +6,5 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+# smoke runs = wiring checks เท่านั้น ไม่ใช่หลักฐาน (full raw CSV committed)
+outputs/*_smoke_raw.csv
