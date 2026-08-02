@@ -40,7 +40,38 @@ imbalance-invariant (the class prior never enters the formula).
 pip install leadx
 ```
 
-## Quickstart — PU retrieval
+## Quickstart — XGBoost-shaped API (recommended)
+
+```python
+from leadx import LeadXClassifier
+
+m = LeadXClassifier(profile="rare_pu")     # measured flagship config
+m.fit(X, y)                                # y = 1 confirmed positive, 0 UNLABELED
+                                           # X: pandas / polars / numpy / pyarrow
+scores = m.predict_proba(X_next_week)[:, 1]
+queue  = m.review_queue(X_next_week, frac=0.001)   # indices to investigate
+```
+
+`y == 0` means **unlabeled, not negative** — the whole of `X` becomes the
+background population (the positive-unlabeled setting fraud and lead problems
+actually live in). Pass `task="two_class"` when zeros are confirmed negatives.
+
+For a *temporal* problem, select the configuration on a later window rather than
+by random cross-validation:
+
+```python
+m.fit(X_week1, y_week1, eval_set=(X_week2, y_week2),
+      param_grid={"n_bits": [8, 10, 12], "engine": ["hyperplane", "rpforest"]},
+      eval_metric="recall@0.5%")
+```
+
+Other conveniences: `predict`, `decision_function` (raw lift — use this for
+cascades/ensembles), `feature_importances_`, `save_model`/`load_model`,
+`get_params`/`set_params` (works inside scikit-learn pipelines), and
+`background_policy="frozen"|"refresh"` to choose whether the density denominator
+is fixed at fit time or re-estimated from each scored batch.
+
+## Quickstart — core API (explicit PU contract)
 
 ```python
 import polars as pl
@@ -127,7 +158,7 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - **Auto-tuner**: one hash at max resolution evaluates the whole
   (bits x tables x scoring) grid via prefix masking, cross-fitted to avoid
   OOF leakage; evaluates both engines and picks per dataset.
-- **145 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
+- **160 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
   on every artifact.
 
 ## Benchmarks and evidence policy
@@ -189,6 +220,8 @@ accuracy and frozen-backbone reuse are proven **separately**, not together.
 3. Categorical handling via MinHash — **done** (`cat_engine="minhash"`),
    validated on one dataset; needs a second dataset + backbone-reuse integration.
 4. English documentation.
+5. XGBoost-shaped `LeadXClassifier` — **done** (v0.3): `fit(X, y)` PU semantics,
+   pandas/numpy/pyarrow input, `eval_set` for temporal selection, sklearn compat.
 
 ## License & acknowledgments
 

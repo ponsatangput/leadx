@@ -186,6 +186,16 @@ class LeadX:
             )
         if self.mode == "two_class" and y is None:
             raise ValueError("two_class ต้องการ y")
+        if self.mode == "pu" and y is not None:
+            yv = np.asarray(y)
+            if not np.all(yv == 1):
+                raise ValueError(
+                    "mode='pu' ถือว่า *ทุกแถวใน df เป็น positive ที่ยืนยันแล้ว* — "
+                    "การส่ง y ที่มี 0 ปนมาจะถูกละเลยเงียบๆ (แถว y=0 จะถูกนับเป็น seed ด้วย). "
+                    "ถ้ามีตาราง X พร้อมคอลัมน์ label (1=ยืนยันแล้ว, 0=unlabeled) ให้ใช้ "
+                    "LeadXClassifier().fit(X, y) หรือเรียก "
+                    "LeadX(mode='pu').fit(X.filter(y==1), background=X)"
+                )
         y = np.ones(n) if (self.mode == "pu" and y is None) else np.asarray(y, dtype=np.float64)
         if self.mode == "two_class" and len(np.unique(y)) < 2:
             raise ValueError(
@@ -357,6 +367,18 @@ class LeadX:
             )
         w = np.abs(Z.mean(axis=0) - Z_bg.mean(axis=0)) + 1e-3
         return (w / w.max()).astype(np.float32)
+
+    def transform_codes(self, df: pl.DataFrame) -> np.ndarray:
+        """encode -> weight -> hash (+ MinHash categorical) -> bucket codes
+
+        คืน matrix (n, n_tables[+cat]) uint64 แบบเดียวกับที่ scorer ใช้ — เปิดไว้ให้
+        ต่อยอด (cascade, ประเมิน background ใหม่, ส่ง codes ให้หลาย task)
+        """
+        Z = self.encoder_.transform(self._drop_mh(df))
+        if self.feature_weights_ is not None:
+            Z = Z * self.feature_weights_
+        return self._append_minhash(
+            self.hasher_.transform(Z, chunk_size=self.chunk_size), df)
 
     def score_samples(self, df: pl.DataFrame) -> np.ndarray:
         """คืน score ต่อแถว (ใช้ได้ทั้งสอง mode)
