@@ -144,21 +144,39 @@ class SeedScorer:
         self.agg = agg
 
     def fit(self, codes: np.ndarray, y: np.ndarray, background_codes=None,
-            background_stats: "BackgroundStats | None" = None) -> "SeedScorer":
+            background_stats: "BackgroundStats | None" = None,
+            sample_weight=None) -> "SeedScorer":
+        """sample_weight: น้ำหนักต่อแถวของ `codes` (seeds) — เช่น ให้ hard fraud
+        case มีน้ำหนักมากกว่าโดยไม่ต้อง duplicate rows. ตัวหาร (background) นับ
+        แถวละ 1 ตามเดิม เพราะประชากรคือประชากร; None = พฤติกรรมเดิมเป๊ะ"""
         codes = np.asarray(codes, dtype=np.uint64)
         y = np.asarray(y, dtype=np.float64)
+        w = None
+        if sample_weight is not None:
+            w = np.asarray(sample_weight, dtype=np.float64).ravel()
+            if w.shape != (codes.shape[0],):
+                raise ValueError(
+                    f"sample_weight ต้องมี {codes.shape[0]} ค่า (ได้ {w.shape}) / "
+                    f"sample_weight must have one value per seed row")
+            if not np.all(np.isfinite(w)) or np.any(w < 0):
+                raise ValueError("sample_weight ต้องเป็นค่าจำกัดและไม่ติดลบ / "
+                                 "must be finite and non-negative")
+            if w.sum() <= 0:
+                raise ValueError("sample_weight รวมกันต้อง > 0 / must sum to > 0")
+        self._sample_weight = w
         self.n_tables_ = codes.shape[1]
         self.tables_ = []
         if self.mode == "two_class":
             if not set(np.unique(y)) <= {0.0, 1.0}:
                 raise ValueError("two_class ต้องการ y เป็น 0/1")
-            n_pos_total, n_total_all = float(y.sum()), float(len(y))
+            wt = np.ones(len(y)) if w is None else w
+            n_pos_total, n_total_all = float((y * wt).sum()), float(wt.sum())
             self.prior_ = 1.0 if self.score_type == "lift" else float(y.mean())
             for k in range(self.n_tables_):
                 g = (
-                    pl.DataFrame({"code": codes[:, k], "y": y})
+                    pl.DataFrame({"code": codes[:, k], "yw": y * wt, "w": wt})
                     .group_by("code")
-                    .agg(n_pos=pl.col("y").sum(), n_total=pl.len().cast(pl.Float64))
+                    .agg(n_pos=pl.col("yw").sum(), n_total=pl.col("w").sum())
                 )
                 if self.score_type == "lift":
                     # e(b) = จำนวน positive ที่คาดใน bucket ถ้าเป็นกลาง; shrink เข้า 1
@@ -187,13 +205,16 @@ class SeedScorer:
             else:
                 background_codes = np.asarray(background_codes, dtype=np.uint64)
                 n_bg_total = float(background_codes.shape[0])
-            n_seed_total = float(codes.shape[0])
+            n_seed_total = float(codes.shape[0]) if w is None else float(w.sum())
             rho = n_seed_total / n_bg_total
             self.prior_ = 1.0 if self.score_type == "lift" else float(rho)
             for k in range(self.n_tables_):
                 seed_g = (
                     pl.DataFrame({"code": codes[:, k]})
                     .group_by("code").agg(n_seed=pl.len().cast(pl.Float64))
+                    if w is None else
+                    pl.DataFrame({"code": codes[:, k], "w": w})
+                    .group_by("code").agg(n_seed=pl.col("w").sum())
                 )
                 bg_g = (
                     background_stats.tables[k] if background_stats is not None else
@@ -235,14 +256,18 @@ class SeedScorer:
                 )
                 self.tables_.append(g.select("code", "score", "n_total"))
         if self.hier_depths is not None:
-            self._fit_hier(codes, y, background_codes, background_stats)
+            self._fit_hier(codes, y, background_codes, background_stats, w)
         return self
 
-    def _fit_hier(self, codes, y, background_codes, background_stats=None):
+    def _fit_hier(self, codes, y, background_codes, background_stats=None,
+                  sample_weight=None):
         """เก็บตารางนับ (n_pos, n_ref) ต่อ (table, depth) เป็น numpy lookup"""
         ref_codes = None
+        w_pos = sample_weight
         if self.mode == "two_class":
             pos_codes, ref_codes = codes[y == 1.0], codes
+            if w_pos is not None:
+                w_pos = w_pos[y == 1.0]
         elif background_stats is not None:
             if (background_stats.hier is None
                     or tuple(background_stats.hier_depths) != self.hier_depths
@@ -255,7 +280,8 @@ class SeedScorer:
             pos_codes = codes
         else:
             pos_codes, ref_codes = codes, background_codes  # lift+pu มี bg การันตีแล้ว
-        self.hier_pos_total_ = float(pos_codes.shape[0])
+        self.hier_pos_total_ = (float(pos_codes.shape[0]) if w_pos is None
+                                else float(w_pos.sum()))
         self.hier_ref_total_ = (background_stats.n_total if ref_codes is None
                                 else float(ref_codes.shape[0]))
         self.hier_tables_ = []
@@ -263,7 +289,11 @@ class SeedScorer:
             per_depth = []
             for i, d in enumerate(self.hier_depths):
                 sh = np.uint64(self.n_bits - d)
-                pu_, pc_ = np.unique(pos_codes[:, k] >> sh, return_counts=True)
+                if w_pos is None:
+                    pu_, pc_ = np.unique(pos_codes[:, k] >> sh, return_counts=True)
+                else:
+                    pu_, inv = np.unique(pos_codes[:, k] >> sh, return_inverse=True)
+                    pc_ = np.bincount(inv, weights=w_pos, minlength=len(pu_))
                 if ref_codes is None:
                     ru_, rc_ = background_stats.hier[k][i]
                 else:

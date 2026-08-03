@@ -9,7 +9,7 @@ random-projection-tree ensemble with density-ratio scoring and a reusable
 hashing backbone. Pure batch operations (NumPy + Polars); validated up to
 10M rows on a laptop.
 
-> **Status: v0.1 research preview.** This library ships with an unusually
+> **Status: v0.4 research preview.** This library ships with an unusually
 > adversarial benchmark suite: every performance claim links to a raw CSV
 > artifact, paired per-draw analysis is used instead of ratio-of-medians, and
 > the docs list what has **not** been proven yet. Headline accuracy results
@@ -39,6 +39,61 @@ imbalance-invariant (the class prior never enters the formula).
 ```bash
 pip install leadx
 ```
+
+## Fraud / extreme-imbalance quickstart
+
+The regime this is built for: millions of rows, a few thousand **confirmed**
+frauds, everything else unlabeled, and a review team that can only look at the
+top fraction of a queue.
+
+```python
+from leadx import LeadXClassifier
+
+# all-numeric feature table (categoricals already encoded upstream) — the
+# common case. rare_pu falls back to cat_engine="onehot" and tells you so.
+m = LeadXClassifier(profile="rare_pu")
+m.fit(X_train, y_train,                    # y = 1 confirmed fraud, 0 unlabeled
+      sample_weight=w_train)               # optional: weight hard cases higher
+queue = m.review_queue(X_next_week, frac=0.001)     # today's investigation list
+```
+
+If some columns really are high-cardinality IDs (account, merchant, device),
+pass a dataframe and name them — MinHash gives Jaccard locality over them
+instead of one-hot blow-up:
+
+```python
+m = LeadXClassifier(profile="rare_pu",
+                    categorical_columns=["account_id", "merchant_id", "device"])
+m.fit(df_train, y_train)
+```
+
+Select the configuration on a **later time window**, not by random CV:
+
+```python
+m.fit(X_week1, y_week1, eval_set=(X_week2, y_week2),
+      param_grid={"n_bits": [8, 10, 12], "engine": ["hyperplane", "rpforest"]},
+      eval_metric="recall@1000")     # also: recall@0.5%, precision@K, pr_auc, f1
+```
+
+Already running XGBoost? The measured best use is a **cascade**, not a
+replacement — LeadX shortlists the whole population cheaply, XGBoost re-ranks
+the shortlist (+22.5% Recall@0.1%, 6/6 folds at 1:1,000; see
+[`COMBINER_REPORT.md`](outputs/COMBINER_REPORT.md)):
+
+```python
+cand  = m.review_queue(X_next, k=10 * budget)          # LeadX over everything
+queue = cand[np.argsort(-xgb.predict_proba(X_next[cand])[:, 1])[:budget]]
+```
+
+**Three things to know**
+
+- `predict_proba` in PU mode is a **ranking score rescaled to [0, 1]**, not a
+  calibrated probability — pass `prior=<prevalence>` for a SCAR-style
+  `clip(prior * lift, 0, 1)`, or use `decision_function` (raw lift) for
+  cascades and ensembles.
+- `y == 0` means *unlabeled*, not *negative*.
+- `sample_weight` weights the confirmed positives (the numerator); the
+  background population still counts one row each.
 
 ## Quickstart — XGBoost-shaped API (recommended)
 
@@ -158,7 +213,7 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - **Auto-tuner**: one hash at max resolution evaluates the whole
   (bits x tables x scoring) grid via prefix masking, cross-fitted to avoid
   OOF leakage; evaluates both engines and picks per dataset.
-- **160 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
+- **177 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
   on every artifact.
 
 ## Benchmarks and evidence policy
@@ -220,8 +275,9 @@ accuracy and frozen-backbone reuse are proven **separately**, not together.
 3. Categorical handling via MinHash — **done** (`cat_engine="minhash"`),
    validated on one dataset; needs a second dataset + backbone-reuse integration.
 4. English documentation.
-5. XGBoost-shaped `LeadXClassifier` — **done** (v0.3): `fit(X, y)` PU semantics,
-   pandas/numpy/pyarrow input, `eval_set` for temporal selection, sklearn compat.
+5. XGBoost-shaped `LeadXClassifier` — **done** (v0.3–v0.4): `fit(X, y)` PU
+   semantics, pandas/numpy/pyarrow input, `eval_set` for temporal selection,
+   `sample_weight`, all-numeric fallback, richer metrics, sklearn compat.
 
 ## License & acknowledgments
 

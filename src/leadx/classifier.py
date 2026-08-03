@@ -162,7 +162,8 @@ class LeadX:
                                       chunk_size=chunk_size or self.chunk_size)
         return np.concatenate([codes, cat], axis=1)
 
-    def fit(self, df: pl.DataFrame, y=None, background: pl.DataFrame | None = None):
+    def fit(self, df: pl.DataFrame, y=None, background: pl.DataFrame | None = None,
+            sample_weight=None):
         """Train บน seeds (ข้อมูลที่มี label)
 
         Parameters
@@ -333,7 +334,7 @@ class LeadX:
             mode=self.mode, m=cfg["m"], weights=cfg["weights"], n_bits=cfg["n_bits"],
             score_type=cfg["score_type"], alpha=cfg["alpha"], agg=cfg["agg"],
             hier_depths=hier, multi_probe=(self.minhash_ is None),
-        ).fit(codes, y, background_codes=bg_codes)
+        ).fit(codes, y, background_codes=bg_codes, sample_weight=sample_weight)
         self._pi = float(y.mean()) if self.mode == "two_class" else None
         # PU calibration: normalize ด้วยค่าคงที่จาก fit (batch-invariant) — spec ห้าม
         # ใช้ min/max ของ batch ที่กำลัง score

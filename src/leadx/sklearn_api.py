@@ -27,7 +27,8 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.metrics import average_precision_score
+from sklearn.metrics import (average_precision_score,
+                             precision_recall_curve, roc_auc_score)
 
 from .classifier import LeadX
 from .frames import to_polars
@@ -48,18 +49,55 @@ _TUNABLE = ("n_bits", "n_tables", "score_type", "agg", "feature_weighting",
             "engine", "cat_engine", "hier_depths")
 
 
-def _recall_at(y: np.ndarray, s: np.ndarray, frac: float) -> float:
-    k = max(1, int(np.ceil(len(y) * frac)))
+SUPPORTED_METRICS = (
+    "pr_auc", "roc_auc", "f1",
+    "recall@K (top-K rows, e.g. recall@1000)", "recall@P% (e.g. recall@0.5%)",
+    "precision@K (e.g. precision@1000)", "precision@P% (e.g. precision@0.5%)",
+)
+
+
+def _top_k(y: np.ndarray, s: np.ndarray, spec: str) -> tuple[np.ndarray, int]:
+    """spec = '1000' (top-K rows) หรือ '0.5%' (top fraction) -> (hit labels, k)"""
+    spec = spec.strip()
+    if spec.endswith("%"):
+        frac = float(spec[:-1]) / 100.0
+        if not 0 < frac <= 1:
+            raise ValueError(f"percentage ต้องอยู่ใน (0, 100] — ได้ {spec}")
+        k = int(np.ceil(len(y) * frac))
+    else:
+        k = int(float(spec))
+        if k <= 0:
+            raise ValueError(f"k ต้อง > 0 — ได้ {spec}")
+    k = max(1, min(k, len(y)))
     idx = np.argpartition(-s, k - 1)[:k]
-    return float(y[idx].sum()) / max(1.0, float(y.sum()))
+    return y[idx], k
 
 
 def _score_metric(y: np.ndarray, s: np.ndarray, metric: str) -> float:
-    if metric == "pr_auc":
+    """metric string -> score (สูง = ดี). รูปแบบที่รองรับดู SUPPORTED_METRICS"""
+    name = str(metric).strip().lower()
+    if name == "pr_auc":
         return float(average_precision_score(y, s))
-    if metric.startswith("recall@"):
-        return _recall_at(y, s, float(metric.split("@")[1].rstrip("%")) / 100.0)
-    raise ValueError(f"eval_metric ไม่รู้จัก: {metric} (ใช้ 'pr_auc' หรือ 'recall@0.5%')")
+    if name == "roc_auc":
+        return float(roc_auc_score(y, s))
+    if name == "f1":
+        # best achievable F1 over the ranking (threshold-free — คะแนน lift ไม่ใช่
+        # probability จึงไม่มี threshold 0.5 ที่มีความหมาย)
+        prec, rec, _ = precision_recall_curve(y, s)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f1 = np.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0.0)
+        return float(np.nanmax(f1))
+    if "@" in name:
+        kind, spec = name.split("@", 1)
+        if kind in ("recall", "precision"):
+            hits, k = _top_k(y, s, spec)
+            n_hit = float(hits.sum())
+            if kind == "recall":
+                return n_hit / max(1.0, float(y.sum()))
+            return n_hit / k
+    raise ValueError(
+        f"eval_metric ไม่รู้จัก / unknown eval_metric: {metric!r}. "
+        f"Supported: {', '.join(SUPPORTED_METRICS)}")
 
 
 class LeadXClassifier(BaseEstimator, ClassifierMixin):
@@ -134,6 +172,29 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         cfg.update(overrides or {})
         return cfg
 
+    def _resolve_cat_engine(self, cfg: dict, Xp: pl.DataFrame) -> dict:
+        """rare_pu defaults to MinHash, but plenty of real feature tables are
+        all-numeric (categoricals already encoded upstream). Fall back instead
+        of failing — unless the user named the columns explicitly, in which case
+        a missing column is still an error."""
+        if cfg["cat_engine"] != "minhash":
+            return cfg
+        # profile-level coherence: hier needs a single bit-width, MinHash tables
+        # have their own — drop hier when it came from the profile (an explicit
+        # hier_depths= still reaches LeadX and gets its warning there)
+        if self.hier_depths is None and cfg.get("hier_depths") is not None:
+            cfg = {**cfg, "hier_depths": None}
+        if self.categorical_columns is not None:
+            return cfg                      # explicit -> LeadX validates & raises
+        if not any(not Xp[c].dtype.is_numeric() for c in Xp.columns):
+            warnings.warn(
+                "no categorical columns found; falling back to "
+                "cat_engine='onehot' (numeric-only input). Pass "
+                "categorical_columns=[...] if some numeric columns are really "
+                "categorical IDs.", UserWarning, stacklevel=3)
+            cfg = {**cfg, "cat_engine": "onehot"}
+        return cfg
+
     def _build(self, cfg: dict) -> LeadX:
         return LeadX(
             mode="pu" if self.task == "pu" else "two_class", tune=False,
@@ -145,14 +206,18 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
             chunk_size=self.chunk_size, random_state=self.random_state,
         )
 
-    def _fit_one(self, X: pl.DataFrame, y: np.ndarray, cfg: dict) -> LeadX:
+    def _fit_one(self, X: pl.DataFrame, y: np.ndarray, cfg: dict,
+                 sample_weight=None) -> LeadX:
         model = self._build(cfg)
         if self.task == "pu":
-            return model.fit(X.filter(pl.Series(y == 1)), background=X)
-        return model.fit(X, y=y)
+            sw = None if sample_weight is None else sample_weight[y == 1]
+            return model.fit(X.filter(pl.Series(y == 1)), background=X,
+                             sample_weight=sw)
+        return model.fit(X, y=y, sample_weight=sample_weight)
 
     # ---------------------------------------------------------------- fit ---
-    def fit(self, X, y, eval_set=None, param_grid=None, eval_metric="pr_auc"):
+    def fit(self, X, y, eval_set=None, param_grid=None, eval_metric="pr_auc",
+            sample_weight=None):
         """Fit on ``(X, y)``; ``y == 1`` confirmed positive, ``y == 0`` unlabeled.
 
         ``eval_set=(X_val, y_val)`` scores the fitted model on a held-out set —
@@ -176,14 +241,26 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
             raise ValueError(f"ต้องมี y==1 อย่างน้อย 20 แถว (ได้ {n_pos})")
         if n_pos == len(y):
             raise ValueError("y เป็น 1 ทั้งหมด — ต้องมีประชากร unlabeled ให้เทียบด้วย")
+        if sample_weight is not None:
+            sample_weight = np.asarray(sample_weight, dtype=np.float64).ravel()
+            if sample_weight.shape != (len(y),):
+                raise ValueError(
+                    f"sample_weight ต้องมี {len(y)} ค่า (ได้ {sample_weight.shape}) / "
+                    f"sample_weight must have one value per row of X")
+            if not np.all(np.isfinite(sample_weight)) or np.any(sample_weight < 0):
+                raise ValueError("sample_weight ต้องเป็นค่าจำกัดและไม่ติดลบ / "
+                                 "must be finite and non-negative")
+            if self.task == "pu" and sample_weight[y == 1].sum() <= 0:
+                raise ValueError("น้ำหนักรวมของ positive seeds ต้อง > 0 / "
+                                 "positive seed weights must sum to > 0")
         self.feature_names_in_ = list(Xp.columns)
         self.n_features_in_ = Xp.width
         self.classes_ = np.array([0, 1])
 
-        candidates = [self._resolve()]
+        candidates = [self._resolve_cat_engine(self._resolve(), Xp)]
         if param_grid:
             keys = sorted(param_grid)
-            candidates = [self._resolve(dict(zip(keys, combo)))
+            candidates = [self._resolve_cat_engine(self._resolve(dict(zip(keys, combo))), Xp)
                           for combo in itertools.product(*(param_grid[k] for k in keys))]
             if eval_set is None:
                 raise ValueError("param_grid ต้องมาคู่กับ eval_set "
@@ -196,7 +273,7 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
             Xv = to_polars(Xv_raw, columns=self.feature_names_in_)
             yv = np.asarray(yv).ravel()
         for cfg in candidates:
-            model = self._fit_one(Xp, y, cfg)
+            model = self._fit_one(Xp, y, cfg, sample_weight)
             if Xv is None:
                 best, best_cfg = model, cfg
                 break
@@ -209,6 +286,7 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         self.model_ = best
         self.best_params_ = best_cfg
         self.best_score_ = None if Xv is None else best_score
+        self.eval_metric_ = eval_metric if Xv is not None else None
 
         # fit-time reference scores: batch-invariant [0,1] mapping + threshold
         ref = self.model_.score_samples(Xp)
@@ -316,12 +394,22 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
     def save_model(self, path) -> None:
         path = Path(path)
         self.model_.save(path / "leadx")
+        import sklearn
+        from . import __version__ as _leadx_version
         meta = {"params": self.get_params(),
                 "feature_names_in": self.feature_names_in_,
+                "n_features_in": self.n_features_in_,
                 "best_params": self.best_params_,
+                "best_score": self.best_score_,
+                "evals_result": self.evals_result_,
+                "eval_metric": getattr(self, "eval_metric_", None),
                 "ref_lo": self._ref_lo, "ref_hi": self._ref_hi,
                 "threshold": self._threshold,
-                "imp_dims": np.asarray(self._imp_dims).tolist()}
+                "imp_dims": np.asarray(self._imp_dims).tolist(),
+                "leadx_version": _leadx_version,
+                "numpy_version": np.__version__,
+                "polars_version": pl.__version__,
+                "sklearn_version": sklearn.__version__}
         (path / "wrapper.json").write_text(json.dumps(meta))
         if self.background_policy == "refresh":
             np.save(path / "seed_codes.npy", self._seed_codes)
@@ -333,11 +421,15 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         obj = cls(**meta["params"])
         obj.model_ = LeadX.load(path / "leadx")
         obj.feature_names_in_ = meta["feature_names_in"]
-        obj.n_features_in_ = len(obj.feature_names_in_)
+        obj.n_features_in_ = meta.get("n_features_in", len(obj.feature_names_in_))
         obj.classes_ = np.array([0, 1])
         obj.best_params_ = meta["best_params"]
-        obj.evals_result_ = []
-        obj.best_score_ = None
+        obj.evals_result_ = meta.get("evals_result", [])
+        obj.best_score_ = meta.get("best_score")
+        obj.eval_metric_ = meta.get("eval_metric")
+        obj.saved_versions_ = {k: meta.get(k) for k in
+                               ("leadx_version", "numpy_version",
+                                "polars_version", "sklearn_version")}
         obj._ref_lo, obj._ref_hi = meta["ref_lo"], meta["ref_hi"]
         obj._threshold = meta["threshold"]
         obj._imp_dims = np.asarray(meta.get("imp_dims", []), dtype=np.float64)
