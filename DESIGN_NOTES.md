@@ -252,6 +252,20 @@ Exact-kNN oracle gate บน home-credit PU (รายละเอียด outp
 
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
+**Feature selection ก่อน fit (IG top-k)** — ultra-imbalance, 9 paired draws:
+ทุก variant **แพ้ขาด** — oracle_ig_16 −40.4%, oracle_ig_48 −29.0%, pu_ig_16 −43.8%,
+pu_ig_48 −26.2% (PR-AUC, ชนะ 1/9 เท่ากันหมด; gate ต้องการ +5% และ ≥7/9)
+**หลักฐานชี้กลไก:** `oracle_ig` (IG จาก label จริงทั้ง train set = ขีดบนของการคัด
+univariate) **เสมอกับ** `pu_ig` (4–6 จาก 9) → ความล้มเหลวไม่ได้อยู่ที่ประมาณ IG ผิด
+แต่**เกณฑ์ univariate เองผิดกับ density-ratio scorer**: bucket ที่ discriminative มาจาก
+*การประกอบกัน*ของ feature ที่หายากและ enriched ไม่ใช่จากการที่แต่ละตัวทำนายเก่งเดี่ยวๆ
+IG จึงตัด feature ที่ร่วมสร้าง conjunction ทิ้ง ยืนยันด้วยสองสัญญาณ: k=48 แย่น้อยกว่า
+k=16 ทุกช่อง (monotone กับ D) และ ROC เสียหายน้อยกว่า PR-AUC 5–10 เท่า (ความเสียหาย
+กระจุกที่หัวแถว = จุดที่ resolution ของ partition สำคัญ) สมมติฐานเดิม SNR≈√(k/(D−k))
+สมมติว่าสัญญาณอยู่ใน subspace ของ feature ที่ informative เดี่ยวๆ — ไม่จริงในโจทย์นี้
+→ **LeadX ใช้ feature กว้างๆ ได้เป็นคุณสมบัติ ผู้ใช้ไม่ต้อง (และไม่ควร) คัดก่อน**
+(ดู `outputs/FEATURE_SELECTION_REPORT.md`; ยังไม่ได้ทดสอบกรณีเติม pure noise columns)
+
 **Two-step PU (reliable negatives + self-training)** — home-credit PU, 5 draws:
 onestep 0.1985 vs twostep_same 0.1918 / twostep_reweight 0.1902 (แพ้ 0/5 ทั้งคู่)
 **เหตุผลเชิงโครงสร้าง:** two-step ออกแบบมาสำหรับ discriminative classifiers ที่*ต้องมี*
