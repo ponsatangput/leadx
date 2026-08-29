@@ -317,10 +317,30 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         return np.asarray(w, dtype=np.float64)
 
     # -------------------------------------------------------------- score ---
-    def decision_function(self, X) -> np.ndarray:
-        """raw LeadX score (lift scale) — use this for cascades / ensembling"""
+    def _stream_frames(self, X, chunk_rows):
+        """chunk ของ X ที่จัดคอลัมน์ให้ตรงกับตอน fit แล้ว — ไม่ collect ทั้งชุด"""
+        if self.background_policy != "frozen":
+            raise ValueError(
+                "chunk_rows ใช้กับ background_policy='frozen' เท่านั้น — 'refresh' "
+                "ประเมินตัวหารใหม่จาก batch ทั้งก้อนที่กำลัง score (transductive) "
+                "จึงต้องเห็นทุกแถวพร้อมกัน"
+            )
+        for frame in self.model_._iter_frames(X, chunk_rows):
+            yield to_polars(frame, columns=self.feature_names_in_)
+
+    def decision_function(self, X, chunk_rows: int | None = None) -> np.ndarray:
+        """raw LeadX score (lift scale) — use this for cascades / ensembling
+
+        ``chunk_rows`` จำกัด peak memory โดยประมวลผลทีละ chunk (ผลเท่าเดิม);
+        ถ้า population ใหญ่จนถือ score ทั้งชุดไม่ไหว ใช้ ``review_queue(...,
+        chunk_rows=...)`` ซึ่งเก็บแค่ top-k
+        """
         if not hasattr(self, "model_"):
             raise RuntimeError("ต้อง fit ก่อน")
+        if chunk_rows is not None:
+            parts = [self.model_.score_samples(f)
+                     for f in self._stream_frames(X, chunk_rows)]
+            return np.concatenate(parts) if parts else np.empty(0)
         Xp = to_polars(X, columns=self.feature_names_in_)
         if self.background_policy == "frozen":
             return self.model_.score_samples(Xp)
@@ -351,14 +371,46 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         """flag the ``contamination`` fraction, using the fit-time threshold"""
         return (self.decision_function(X) >= self._threshold).astype(int)
 
-    def review_queue(self, X, k=None, frac=None) -> np.ndarray:
-        """indices of the top-k (or top-``frac``) rows — the operational output"""
-        s = self.decision_function(X)
+    def review_queue(self, X, k=None, frac=None,
+                     chunk_rows: int | None = None) -> np.ndarray:
+        """indices of the top-k (or top-``frac``) rows — the operational output
+
+        Parameters
+        ----------
+        chunk_rows : int | None
+            ถ้าระบุ จะ stream ทีละ chunk และเก็บแค่ top-k ระหว่างทาง (memory
+            O(k + chunk) ไม่ใช่ O(n)) — ทำให้ shortlist ของ cascade ใช้ได้กับ
+            ประชากรที่ใหญ่กว่า RAM เช่น ``pl.scan_parquet("week=*/*.parquet")``
+            ต้องใช้ ``background_policy="frozen"`` (ค่า default)
+        """
         if (k is None) == (frac is None):
             raise ValueError("ระบุ k หรือ frac อย่างใดอย่างหนึ่ง")
-        kk = int(k) if k is not None else max(1, int(np.ceil(len(s) * float(frac))))
-        kk = min(kk, len(s))
-        return np.argsort(-s, kind="stable")[:kk]
+        if chunk_rows is None:
+            s = self.decision_function(X)
+            kk = int(k) if k is not None else max(1, int(np.ceil(len(s) * float(frac))))
+            return np.argsort(-s, kind="stable")[: min(kk, len(s))]
+        if k is not None:
+            kk = int(k)
+        else:
+            n = self._row_count(X)
+            if n is None:
+                raise ValueError(
+                    "frac ต้องรู้จำนวนแถวล่วงหน้า — source นี้นับไม่ได้โดยไม่อ่านทั้งชุด "
+                    "ให้ระบุ k (จำนวนที่ทีมรีวิวไหว) แทน"
+                )
+            kk = max(1, int(np.ceil(n * float(frac))))
+        idx, _ = self.model_.top_k(self._stream_frames(X, chunk_rows), kk,
+                                   chunk_rows=None)
+        return idx
+
+    @staticmethod
+    def _row_count(X) -> int | None:
+        """จำนวนแถวถ้ารู้ได้ถูก (parquet เก็บไว้ใน metadata) — None ถ้าต้องอ่านทั้งชุด"""
+        if isinstance(X, pl.LazyFrame):
+            return int(X.select(pl.len()).collect().item())
+        if isinstance(X, pl.DataFrame):
+            return X.height
+        return len(X) if hasattr(X, "__len__") else None
 
     # --------------------------------------------------------- importances ---
     @property

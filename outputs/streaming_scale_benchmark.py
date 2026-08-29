@@ -50,12 +50,17 @@ def peak_gb() -> float:
 def worker(mode: str, n: int, d: int) -> None:
     from leadx import LeadX
     glob = str(DATA / "*.parquet")
-    lf = pl.scan_parquet(glob)
+    files = sorted(DATA.glob("*.parquet"))
     n_seeds = max(200, n // 1000)
-    seeds = lf.slice(0, n_seeds).collect()
+    seeds = pl.scan_parquet(glob).slice(0, n_seeds).collect()
     # geometry + สถิติ background จาก sample (lift ใช้ n_total/n_bg_total = สัดส่วนมวล
     # จึงประมาณจาก uniform sample ได้ — ดู BACKGROUND_SAMPLE_REPORT.md)
-    bg = lf.gather_every(max(1, n // 200_000)).collect()
+    #
+    # สุ่มโดย **อ่านเฉพาะบาง partition** ไม่ใช่ gather_every ทั้งชุด: gather_every
+    # บน scan ต้อง materialize ทุกแถวก่อนถึงจะหยิบทุก k แถวได้ ซึ่งทำให้ peak
+    # ของขั้น fit เท่ากับอ่านทั้งไฟล์ — ผิดวัตถุประสงค์และทำไม่ได้ที่ 500M
+    n_bg_files = max(1, len(files) // 20)
+    bg = pl.read_parquet([str(f) for f in files[:n_bg_files]])
     model = LeadX(mode="pu", tune=False, n_bits=10, n_tables=40,
                   score_type="lift", agg="log", random_state=0).fit(seeds, background=bg)
     del bg, seeds

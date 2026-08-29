@@ -139,3 +139,63 @@ def test_empty_frame_yields_nothing(fitted):
     assert list(model.score_batches(df[:0])) == []
     idx, sc = model.top_k(df[:0], 5)
     assert len(idx) == 0 and len(sc) == 0
+
+
+# --------------------------------------------------------- sklearn wrapper ---
+
+@pytest.fixture(scope="module")
+def clf_fitted():
+    from leadx import LeadXClassifier
+    rng = np.random.default_rng(1)
+    n, d = 3000, 6
+    X = rng.normal(size=(n, d))
+    y = np.zeros(n, dtype=int)
+    X[:150] += 2.5
+    y[:150] = 1
+    return LeadXClassifier(profile="fast", n_bits=6, n_tables=10,
+                           random_state=0).fit(X, y), X
+
+
+def test_decision_function_chunked_matches(clf_fitted):
+    clf, X = clf_fitted
+    np.testing.assert_allclose(
+        clf.decision_function(X, chunk_rows=400), clf.decision_function(X), **ULP)
+
+
+def test_review_queue_chunked_matches(clf_fitted):
+    clf, X = clf_fitted
+    np.testing.assert_array_equal(
+        clf.review_queue(X, k=50, chunk_rows=333), clf.review_queue(X, k=50))
+
+
+def test_review_queue_frac_chunked_matches(clf_fitted):
+    clf, X = clf_fitted
+    np.testing.assert_array_equal(
+        clf.review_queue(X, frac=0.02, chunk_rows=250),
+        clf.review_queue(X, frac=0.02))
+
+
+def test_review_queue_streams_lazyframe(clf_fitted):
+    clf, X = clf_fitted
+    lf = pl.DataFrame(X, schema=list(clf.feature_names_in_)).lazy()
+    np.testing.assert_array_equal(
+        clf.review_queue(lf, k=40, chunk_rows=500), clf.review_queue(X, k=40))
+
+
+def test_review_queue_reorders_columns_per_chunk(clf_fitted):
+    clf, X = clf_fitted
+    names = list(clf.feature_names_in_)
+    shuffled = pl.DataFrame(X, schema=names).select(names[::-1])
+    np.testing.assert_array_equal(
+        clf.review_queue(shuffled, k=30, chunk_rows=400), clf.review_queue(X, k=30))
+
+
+def test_chunked_refresh_policy_raises(clf_fitted):
+    from leadx import LeadXClassifier
+    _, X = clf_fitted
+    y = np.zeros(len(X), dtype=int)
+    y[:150] = 1
+    c = LeadXClassifier(profile="fast", n_bits=6, n_tables=10, random_state=0,
+                        background_policy="refresh").fit(X, y)
+    with pytest.raises(ValueError, match="background_policy"):
+        c.decision_function(X, chunk_rows=500)

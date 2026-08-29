@@ -408,10 +408,12 @@ class LeadX:
         """
         if chunk_rows is not None and chunk_rows < 1:
             raise ValueError(f"chunk_rows ต้อง >= 1 (ได้ {chunk_rows})")
-        if isinstance(source, (pl.DataFrame, pl.LazyFrame)) or hasattr(source, "columns"):
-            parts = [source]
-        else:
-            parts = source
+        single = (
+            isinstance(source, (pl.DataFrame, pl.LazyFrame, dict))
+            or hasattr(source, "columns")                      # pandas / pyarrow
+            or (isinstance(source, np.ndarray) and source.ndim == 2)
+        )
+        parts = [source] if single else source
         for part in parts:
             if isinstance(part, pl.LazyFrame):
                 n = part.select(pl.len()).collect().item()
