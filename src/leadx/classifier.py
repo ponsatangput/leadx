@@ -10,6 +10,7 @@ import numpy as np
 import polars as pl
 
 from .encoder import FeatureEncoder
+from .frames import to_polars
 from .hashing import HashEnsemble, infer_hash_mode
 from .minhash import MinHashCat
 from .projections import ProjectionBank, projection_diagnostics
@@ -381,7 +382,135 @@ class LeadX:
         return self._append_minhash(
             self.hasher_.transform(Z, chunk_size=self.chunk_size), df)
 
-    def score_samples(self, df: pl.DataFrame) -> np.ndarray:
+    def _score_frame(self, df: pl.DataFrame) -> np.ndarray:
+        """score หนึ่ง frame — ไม่แตะ diagnostics_ (ผู้เรียกรวมเอง)
+
+        ทุกขั้นในนี้เป็น per-row ล้วน: encoder ใช้สถิติที่ตรึงตอน fit, hash เป็น
+        ฟังก์ชันของแถวเดียว, scorer เป็นการ lookup bucket, และ normalize_pu ใช้
+        ค่าคงที่จาก fit — จึงการันตีว่าคะแนนของแถวไม่ขึ้นกับว่ามันถูก score
+        มาพร้อมกับแถวไหน (ดู tests/test_streaming.py)
+        """
+        Z = self.encoder_.transform(self._drop_mh(df))
+        if self.feature_weights_ is not None:
+            Z = Z * self.feature_weights_
+        codes = self._append_minhash(
+            self.hasher_.transform(Z, chunk_size=self.chunk_size), df)
+        s = self.scorer_.score(codes)
+        if self.mode == "pu" and self.config_["score_type"] != "lift":
+            s = normalize_pu(s, self._pu_lo, self._pu_span)
+        return s
+
+    def _iter_frames(self, source, chunk_rows):
+        """source -> ลำดับ polars.DataFrame ที่ไม่เกิน chunk_rows แถว
+
+        รับ DataFrame, LazyFrame (slice ก่อน collect — ไม่ดึงทั้งไฟล์เข้า RAM),
+        หรือ iterable ของอย่างใดอย่างหนึ่ง (เช่น ลิสต์ parquet ที่ scan ไว้)
+        """
+        if chunk_rows is not None and chunk_rows < 1:
+            raise ValueError(f"chunk_rows ต้อง >= 1 (ได้ {chunk_rows})")
+        if isinstance(source, (pl.DataFrame, pl.LazyFrame)) or hasattr(source, "columns"):
+            parts = [source]
+        else:
+            parts = source
+        for part in parts:
+            if isinstance(part, pl.LazyFrame):
+                n = part.select(pl.len()).collect().item()
+                if n == 0:
+                    continue
+                step = chunk_rows or n
+                for off in range(0, n, step):
+                    yield part.slice(off, step).collect()
+                continue
+            frame = to_polars(part)
+            if frame.height == 0:
+                continue
+            step = chunk_rows or frame.height
+            for off in range(0, frame.height, step):
+                yield frame.slice(off, step)
+
+    def score_batches(self, source, chunk_rows: int | None = None):
+        """generator: score ทีละ chunk ด้วย memory คงที่ (สำหรับประชากรใหญ่กว่า RAM)
+
+        ใช้เมื่อ population ใหญ่เกินกว่าจะ encode ทั้งก้อน — `score_samples` จะ
+        preallocate matrix (n_rows x n_encoded_dims) float32 ทีเดียว ซึ่งที่ 500M แถว
+        x ~150 features คือหลายร้อย GB
+
+        Parameters
+        ----------
+        source : polars.DataFrame | polars.LazyFrame | iterable ของสองอย่างนี้
+            LazyFrame ถูก slice ก่อน collect — `pl.scan_parquet("week=*/*.parquet")`
+            จึงอ่านทีละ chunk ไม่ใช่ทั้งชุด
+        chunk_rows : int | None
+            จำนวนแถวต่อ chunk (None = ทั้ง frame ในครั้งเดียว)
+
+        Yields
+        ------
+        numpy.ndarray, shape (chunk_rows,)
+
+        Notes
+        -----
+        คะแนนเท่ากันเป๊ะกับ `score_samples` ไม่ว่าจะแบ่ง chunk อย่างไร
+        `diagnostics_["scoring"]` อัพเดตหลัง consume จนหมด (ค่าเฉลี่ยถ่วงตามจำนวนแถว)
+        """
+        n_rows = 0
+        acc = {"miss_rate_join": 0.0, "miss_rate_final": 0.0}
+        for frame in self._iter_frames(source, chunk_rows):
+            if frame.height == 0:
+                continue
+            s = self._score_frame(frame)
+            d = self.scorer_.diagnostics_
+            for key in acc:
+                acc[key] += d[key] * frame.height
+            n_rows += frame.height
+            yield s
+        if n_rows:
+            self.diagnostics_["scoring"] = {k: v / n_rows for k, v in acc.items()}
+            self._warn_miss_rate(self.diagnostics_["scoring"]["miss_rate_final"])
+
+    def _warn_miss_rate(self, miss_rate_final: float) -> None:
+        if miss_rate_final > 0.30:
+            warnings.warn(
+                "miss rate > 30% — สาเหตุที่เป็นไปได้: n_bits มากไป หรือ seeds น้อยไป "
+                "ลองลด n_bits หรือเพิ่ม seeds"
+            )
+
+    def top_k(self, source, k: int, chunk_rows: int | None = None):
+        """คืน k แถวคะแนนสูงสุดของทั้ง population ด้วย memory O(k + chunk)
+
+        นี่คือขั้น shortlist ของ cascade ที่วัดไว้ (+22.5% Recall@0.1%, 6/6 —
+        outputs/COMBINER_REPORT.md): LeadX คัดผู้ต้องสงสัยจากทุกแถว แล้วส่งเฉพาะ
+        shortlist ให้โมเดลที่แพงกว่า (เช่น XGBoost) จัดอันดับซ้ำ
+
+        Parameters
+        ----------
+        source : เหมือน `score_batches`
+        k : int
+            จำนวนแถวที่ต้องการ (ถ้า population เล็กกว่า k จะได้เท่าที่มี)
+        chunk_rows : int | None
+
+        Returns
+        -------
+        (indices, scores) : tuple of numpy.ndarray
+            index อ้างอิงตำแหน่งแถวใน source ทั้งหมด (ไม่ใช่ภายใน chunk)
+            เรียงคะแนนมาก→น้อย, tie แตกด้วย index น้อยก่อน (ตรงกับ
+            `np.argsort(-scores, kind="stable")[:k]`)
+        """
+        if k < 1:
+            raise ValueError(f"k ต้อง >= 1 (ได้ {k})")
+        best_s = np.empty(0, dtype=np.float64)
+        best_i = np.empty(0, dtype=np.int64)
+        offset = 0
+        for s in self.score_batches(source, chunk_rows):
+            idx = np.arange(offset, offset + len(s), dtype=np.int64)
+            offset += len(s)
+            cand_s = np.concatenate([best_s, s])
+            cand_i = np.concatenate([best_i, idx])
+            # lexsort: key สุดท้ายคือ primary → เรียง -score ก่อน แล้ว tie ด้วย index
+            order = np.lexsort((cand_i, -cand_s))[:k]
+            best_s, best_i = cand_s[order], cand_i[order]
+        return best_i, best_s
+
+    def score_samples(self, df: pl.DataFrame, chunk_rows: int | None = None) -> np.ndarray:
         """คืน score ต่อแถว (ใช้ได้ทั้งสอง mode)
 
         two_class → smoothed P(positive) ต่อ bucket เฉลี่ยข้าม tables
@@ -390,26 +519,23 @@ class LeadX:
         Parameters
         ----------
         df : polars.DataFrame
-            features (columns ต้องตรงกับตอน fit); ประมวลผลทีละ chunk_size แถว
+            features (columns ต้องตรงกับตอน fit)
+        chunk_rows : int | None
+            ถ้าระบุ จะ encode/hash/score ทีละ chunk_rows แถวเพื่อจำกัด peak memory
+            (ผลลัพธ์เท่ากันเป๊ะ) — สำหรับ population ที่ใหญ่กว่า RAM ใช้
+            `score_batches`/`top_k` แทนเพื่อไม่ต้องถือ score ทั้งชุด
 
         Returns
         -------
         numpy.ndarray, shape (n,)
         """
-        Z = self.encoder_.transform(self._drop_mh(df))
-        if self.feature_weights_ is not None:
-            Z = Z * self.feature_weights_
-        codes = self._append_minhash(
-            self.hasher_.transform(Z, chunk_size=self.chunk_size), df)
-        s = self.scorer_.score(codes)
+        if chunk_rows is not None:
+            parts = list(self.score_batches(df, chunk_rows))
+            return (np.concatenate(parts) if parts
+                    else np.empty(0, dtype=np.float64))
+        s = self._score_frame(df)
         self.diagnostics_["scoring"] = self.scorer_.diagnostics_
-        if self.scorer_.diagnostics_["miss_rate_final"] > 0.30:
-            warnings.warn(
-                "miss rate > 30% — สาเหตุที่เป็นไปได้: n_bits มากไป หรือ seeds น้อยไป "
-                "ลองลด n_bits หรือเพิ่ม seeds"
-            )
-        if self.mode == "pu" and self.config_["score_type"] != "lift":
-            s = normalize_pu(s, self._pu_lo, self._pu_span)
+        self._warn_miss_rate(self.scorer_.diagnostics_["miss_rate_final"])
         return s
 
     def predict_proba(self, df: pl.DataFrame) -> np.ndarray:
