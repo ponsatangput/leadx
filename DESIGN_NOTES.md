@@ -529,6 +529,39 @@ seeds) — anomaly ในตาราง positioning คือ confound นี�
 ข้อบกพร่องของ forest; แนวใช้งาน: hier_depths="auto" สำหรับ seeds น้อย,
 ปิดเมื่อ seeds มาก — prototype/raw: outputs/rpforest_experiment.py
 
+## 8g. Streaming scoring + background sampling — 500M path (2026-08-29)
+
+**คอขวดจริงของ 500M คือขั้น score ไม่ใช่ขั้น fit**
+
+`score_samples` เดิม preallocate `(n_rows x n_encoded_dims)` float32 ทีเดียว —
+`chunk_size` ที่มีอยู่มีผลแค่ตอน hash ไม่ใช่ตอน encode เพิ่ม `score_batches` /
+`top_k` / `score_samples(chunk_rows=)` (+ `review_queue(chunk_rows=)` ใน sklearn API)
+
+วัด 10M x 150 จาก parquet: **peak 11.32 -> 1.87 GB (-83%)** คะแนนตรงกัน และ
+**เร็วกว่า 2.5x** (111k -> 277k rows/s) เพราะ whole-table path เสียเวลากับ memory
+pressure ไม่ใช่การคำนวณ (อาการเดียวกับบั๊ก encoder ใน 8e) peak ขั้น fit = 1.25 GB
+เท่ากันทั้งสาม mode -> ส่วนต่างเป็นขั้น score ล้วน extrapolate 500M: ~566 GB vs
+คงที่ ~1.9 GB (ดู `outputs/STREAMING_SCALE_REPORT.md`)
+
+สัญญาความถูกต้อง: **bucket codes เท่ากันเป๊ะ bit-for-bit** ข้ามทุกการแบ่ง chunk;
+score ต่างได้ <=2 ULP จาก BLAS ใน `exp(log(per_table) @ w)` เท่านั้น; ranking ตรงกัน
+
+**background sample เล็กได้กว่าที่คิดมาก** — 5% (10k แถว, `n_bits=10` -> ~10 แถว/
+bucket) แยกจาก background เต็ม 203k ไม่ออก และ fit เร็วขึ้น 5.9x; 1% (~2 แถว/bucket)
+แย่จริง (-26.6%) ตัวแปรที่น่าจะกำกับคือ **แถวต่อ bucket** (`n_bg` เทียบ `2^n_bits`)
+ไม่ใช่ % ของประชากร — ยังไม่ได้วัดการ scale ของกฎนี้ ship เป็น
+`LeadXClassifier(background_sample=N)`
+
+**บทเรียนเรื่องวินัยการทดลอง (สำคัญกว่าตัวเลข):** การทดลอง background-sample รอบแรก
+pre-register gate ไว้ (median > -5%, draw แย่กว่า -15% <= 1) แล้ว *ทุก* fraction ตก
+gate — แต่ผลไม่ monotone กับขนาด sample เลย (fraud@0.1%: -4.9,+1.9,+14.1,-13.1,
++20.2,-1.2) พอวัด noise floor ตรงๆ (bg เต็ม เปลี่ยนแค่ random_state) พบว่า **spread
+22.2% ของ median, CV 8.1%** ซึ่ง*กว้างกว่า gate เอง* -> gate นั้นสอบไม่ผ่านโดย
+โครงสร้าง แม้เอา background เต็มมาเทียบกับตัวเองก็ตก
+**บทเรียน: วัด noise floor ก่อนตั้ง gate ไม่ใช่หลัง** และ confound ที่ทำให้ผลรวน
+คือ RPForest fit บน background ตาม parity contract -> เปลี่ยน background sample =
+เปลี่ยน geometry realization ไปด้วย แยกสองอย่างไม่ออกถ้าไม่มี control arm
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด

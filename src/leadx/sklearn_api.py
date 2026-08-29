@@ -116,6 +116,14 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         see :class:`~leadx.LeadX`; ``None`` means "take it from the profile"
     categorical_columns : sequence[str] | None
         columns to route through MinHash; ``None`` = auto-detect non-numeric
+    background_sample : int | None
+        PU only. Fit the geometry and the density denominator on a uniform
+        sample of this many rows instead of all of ``X``. The lift formula uses
+        the background as a *mass fraction* (``n_total_b / n_bg_total``), so a
+        uniform sample estimates it without bias; measured at 5% (10k rows,
+        ``n_bits=10``) the loss is inside the seed-to-seed noise floor while fit
+        is 5.9x faster — see ``outputs/BACKGROUND_SAMPLE_REPORT.md``. Rows per
+        bucket is what matters, so keep it well above ``2 ** n_bits``.
     background_policy : {"frozen", "refresh"}
         ``"frozen"`` (default): the density denominator is fixed at fit time, so
         scores are comparable across batches. ``"refresh"``: recompute the
@@ -132,6 +140,7 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
     Attributes
     ----------
     feature_names_in_, n_features_in_, classes_
+    n_background_ : rows used as the PU denominator (None for two_class)
     best_params_, evals_result_ : populated when ``eval_set`` is used
     feature_importances_ : per input column (NaN for MinHash-routed columns)
     """
@@ -139,7 +148,8 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self, profile="rare_pu", task="pu", n_bits=None, n_tables=None,
                  engine=None, cat_engine=None, feature_weighting=None,
                  hier_depths=None, score_type=None, agg=None,
-                 categorical_columns=None, background_policy="frozen",
+                 categorical_columns=None, background_sample=None,
+                 background_policy="frozen",
                  contamination="auto", prior=None, chunk_size=1_000_000,
                  random_state=0):
         self.profile = profile
@@ -153,6 +163,7 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
         self.score_type = score_type
         self.agg = agg
         self.categorical_columns = categorical_columns
+        self.background_sample = background_sample
         self.background_policy = background_policy
         self.contamination = contamination
         self.prior = prior
@@ -209,11 +220,21 @@ class LeadXClassifier(BaseEstimator, ClassifierMixin):
     def _fit_one(self, X: pl.DataFrame, y: np.ndarray, cfg: dict,
                  sample_weight=None) -> LeadX:
         model = self._build(cfg)
-        if self.task == "pu":
-            sw = None if sample_weight is None else sample_weight[y == 1]
-            return model.fit(X.filter(pl.Series(y == 1)), background=X,
-                             sample_weight=sw)
-        return model.fit(X, y=y, sample_weight=sample_weight)
+        if self.task != "pu":
+            self.n_background_ = None
+            return model.fit(X, y=y, sample_weight=sample_weight)
+        sw = None if sample_weight is None else sample_weight[y == 1]
+        bg = X
+        if self.background_sample is not None:
+            n = int(self.background_sample)
+            if n < 1:
+                raise ValueError(f"background_sample ต้อง >= 1 (ได้ {n})")
+            if n < X.height:
+                # ทุก seed ยังอยู่ครบ — ที่ sample คือ *ตัวหาร* (ประชากร unlabeled)
+                bg = X.sample(n, seed=self.random_state, shuffle=False)
+        self.n_background_ = bg.height
+        return model.fit(X.filter(pl.Series(y == 1)), background=bg,
+                         sample_weight=sw)
 
     # ---------------------------------------------------------------- fit ---
     def fit(self, X, y, eval_set=None, param_grid=None, eval_metric="pr_auc",

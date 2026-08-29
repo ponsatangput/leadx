@@ -199,3 +199,68 @@ def test_chunked_refresh_policy_raises(clf_fitted):
                         background_policy="refresh").fit(X, y)
     with pytest.raises(ValueError, match="background_policy"):
         c.decision_function(X, chunk_rows=500)
+
+
+# --------------------------------------------------- background subsampling ---
+
+def _pu_data(n=4000, d=6, seed=3):
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n, d))
+    y = np.zeros(n, dtype=int)
+    X[:200] += 2.5
+    y[:200] = 1
+    return X, y
+
+
+def test_background_sample_shrinks_the_denominator_population():
+    from leadx import LeadXClassifier
+    X, y = _pu_data()
+    c = LeadXClassifier(profile="fast", n_bits=6, n_tables=8, random_state=0,
+                        background_sample=800).fit(X, y)
+    assert c.n_background_ == 800
+    assert LeadXClassifier(profile="fast", n_bits=6, n_tables=8,
+                           random_state=0).fit(X, y).n_background_ == len(X)
+
+
+def test_background_sample_larger_than_population_is_a_noop():
+    from leadx import LeadXClassifier
+    X, y = _pu_data(n=500)
+    a = LeadXClassifier(profile="fast", n_bits=6, n_tables=8, random_state=0,
+                        background_sample=10_000).fit(X, y)
+    b = LeadXClassifier(profile="fast", n_bits=6, n_tables=8, random_state=0).fit(X, y)
+    assert a.n_background_ == 500
+    np.testing.assert_allclose(a.decision_function(X), b.decision_function(X), **ULP)
+
+
+def test_background_sample_is_deterministic_under_random_state():
+    from leadx import LeadXClassifier
+    X, y = _pu_data()
+    kw = dict(profile="fast", n_bits=6, n_tables=8, random_state=7,
+              background_sample=1000)
+    np.testing.assert_allclose(
+        LeadXClassifier(**kw).fit(X, y).decision_function(X),
+        LeadXClassifier(**kw).fit(X, y).decision_function(X), **ULP)
+
+
+def test_background_sample_keeps_ranking_usable():
+    from leadx import LeadXClassifier
+    from sklearn.metrics import roc_auc_score
+    X, y = _pu_data()
+    c = LeadXClassifier(profile="fast", n_bits=6, n_tables=8, random_state=0,
+                        background_sample=1500).fit(X, y)
+    assert roc_auc_score(y, c.decision_function(X)) > 0.9
+
+
+def test_background_sample_rejects_bad_values():
+    from leadx import LeadXClassifier
+    X, y = _pu_data(n=500)
+    with pytest.raises(ValueError, match="background_sample"):
+        LeadXClassifier(profile="fast", background_sample=0).fit(X, y)
+
+
+def test_background_sample_ignored_for_two_class():
+    from leadx import LeadXClassifier
+    X, y = _pu_data(n=600)
+    c = LeadXClassifier(task="two_class", profile="fast", n_bits=6, n_tables=8,
+                        random_state=0, background_sample=100).fit(X, y)
+    assert c.n_background_ is None
