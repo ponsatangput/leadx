@@ -562,6 +562,43 @@ gate — แต่ผลไม่ monotone กับขนาด sample เล�
 คือ RPForest fit บน background ตาม parity contract -> เปลี่ยน background sample =
 เปลี่ยน geometry realization ไปด้วย แยกสองอย่างไม่ออกถ้าไม่มี control arm
 
+## 8h. Precision/recall investigation — 4 สมมติฐาน ผิดทั้ง 4 (2026-08-29)
+
+**คอขวดคือ variance ไม่ใช่ bias** `variance_decomposition`: ตัวการใหญ่สุดคือ
+**seed draw** (CV 18.06%, spread 50.4%) มากกว่า geometry (8.06%) 2.2 เท่า;
+`feature_weighting="contrast"` เป็น shared noise จริง (ปิดแล้ว CV 8.06 -> 4.94)
+แต่ซื้อความแม่น +13.4% = bias-variance trade ไม่ใช่บั๊ก; ROC นิ่ง (CV 0.3-2.7%)
+แต่ PR แกว่ง (5-18%) -> อันดับรวมเสถียร หัวแถวเปราะ
+
+**variance ยุบตัวตามจำนวน seeds** `seed_count_curve` (fraud natural, n_bits=10):
+50 -> 4,000 seeds ทำให้ CV(PR) ยุบ 10 เท่า (9.98% -> 0.94%) และ precision@0.1%
++29% (.656 -> .844) -> **ปัญหา variance ที่เห็นทั้งโปรเจกต์เป็น artifact ของ
+benchmark regime ที่ใช้ seeds 20-61** โจทย์จริง 30k seeds อยู่คนละที่ 500 เท่า
+
+**สมมติฐานที่ผิด 4 ข้อ (กันเดินซ้ำรอย):**
+1. LCB/variance-aware lift จะช่วย precision@k -> กลไกหายเองที่ seeds เยอะ
+2. n_bits ที่ดีสุดเลื่อนตาม seeds (crossover) -> อันดับ 12>10>8 เหมือนกันทั้ง
+   150 และ 4,000 seeds (5/5 ทั้งคู่)
+3. n_bits จะพลิกกลับที่ 14-20 -> ไม่พลิกถึง 20 (1M buckets, 0.004 seeds/bucket,
+   99.6% ว่าง แต่ยังดีสุด +5.4% vs 12, 5/5). น่าจะเพราะ hier + multi-probe +
+   lift fallback=1 จัดการ bucket บางไว้แล้ว (คำอธิบาย ยังไม่ได้ทดสอบตรงๆ)
+4. hyperplane+bits สูง ควรแทน rpforest เป็น default -> ที่ ultra-imbalance
+   hyperplane **แพ้** (0.3%: p@0.1% -5.6%/-4.6%, PR -8.9%/-14.6%)
+
+**แผนที่ regime — อันดับ engine พลิกตาม imbalance ไม่ใช่ตาม seeds:**
+natural (ทั้ง 150 และ 4,000 seeds) -> hyperplane@16-20 ชนะ (p@0.1% +7.9..+14.9%,
+4-5/5, fit เร็วกว่า 3.4x); ultra (ทั้ง 20 และ 61 seeds) -> rpforest ชนะ
+-> **default `rare_pu` (rpforest, n_bits=10) ถูกแล้ว ไม่เปลี่ยน**
+(n_bits 10->12 ที่ได้ +2.7-3.9% 5/5 ที่ natural นั้น ที่ ultra เหลือ +2.51% PR 3/5,
+p@0.1% 0.0% 2/5 = ในกรอบ noise ยังไม่พอเปลี่ยน default)
+
+**ช่องที่วัดไม่ได้:** ultra-imbalance *และ* seeds เยอะพร้อมกัน = โจทย์ PromptPay พอดี
+ต้องมี ~7.3M แถวจึงจะได้ ratio 0.1% กับ positives 7,348 (มี 210k) — อนุมานว่า
+rpforest ยังชนะเพราะอันดับ engine ไม่เปลี่ยนตาม seeds ภายในแต่ละ imbalance
+แต่เป็น **อนุมาน ไม่ใช่ผลวัด**
+
+ดู `outputs/PRECISION_RECALL_INVESTIGATION.md`
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
