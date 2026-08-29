@@ -1,0 +1,4 @@
+mode,n_rows,n_features,seconds,rows_per_s,peak_gb,peak_after_fit_gb,checksum
+whole,10000000,150,89.8,111375,11.32,1.25,103.287427
+streamed,10000000,150,36.1,277134,1.87,1.25,103.287427
+topk,10000000,150,35.3,283463,1.92,1.25,160.938378

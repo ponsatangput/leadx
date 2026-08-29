@@ -85,6 +85,40 @@ cand  = m.review_queue(X_next, k=10 * budget)          # LeadX over everything
 queue = cand[np.argsort(-xgb.predict_proba(X_next[cand])[:, 1])[:budget]]
 ```
 
+### When the population doesn't fit in RAM
+
+Scoring a week of payments (hundreds of millions of rows) never needs the whole
+table in memory. Fit the geometry on a **sample** of the background, then stream
+the population past it — `chunk_rows` bounds peak memory, and `review_queue`
+keeps only the shortlist rather than a score per row:
+
+```python
+import polars as pl
+from leadx import LeadX
+
+seeds = pl.scan_parquet("txn/week=*/*.parquet").filter(pl.col("is_fraud") == 1).collect()
+bg    = pl.read_parquet(sorted(glob("txn/week=*/*.parquet"))[:25])   # a few partitions
+
+model = LeadX(mode="pu", score_type="lift", agg="log", engine="rpforest").fit(
+    seeds, background=bg)
+
+idx, scores = model.top_k(pl.scan_parquet("txn/week=*/*.parquet"),
+                          k=50_000, chunk_rows=1_000_000)
+```
+
+Measured on 10M × 150 features read from parquet: peak RSS **11.3 GB → 1.9 GB**
+(−83%) with identical scores, and 2.5× faster (111k → 277k rows/s) because the
+whole-table path spends its time under memory pressure. Peak stays flat as rows
+grow — see [`STREAMING_SCALE_REPORT.md`](outputs/STREAMING_SCALE_REPORT.md).
+
+Two things that bite at this size:
+
+- Draw the background sample by reading **whole partitions**, not
+  `scan_parquet(...).gather_every(k)` — the latter materialises every row first.
+- `background_policy="refresh"` cannot stream (it re-estimates the denominator
+  from the batch being scored, so it must see all rows at once); the API raises
+  with that explanation rather than silently loading everything.
+
 **Three things to know**
 
 - `predict_proba` in PU mode is a **ranking score rescaled to [0, 1]**, not a
