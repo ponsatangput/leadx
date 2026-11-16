@@ -252,6 +252,24 @@ Exact-kNN oracle gate บน home-credit PU (รายละเอียด outp
 
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
+**Direct density-ratio บน LSH buckets (logistic regression)** — ทฤษฎี: lift = ratio ของ
+LSH-KDE สองตัว (RACE / HBE) และ Sugiyama ชี้ว่าการประมาณ ratio ตรงแม่นกว่าการหาร
+วิธี: bucket one-hot sparse (80 x 1024 = 81,920 คอลัมน์) -> L2 LR seeds vs background
+(PU/SCAR), C=0.1 balanced = Facebook 2014 GBDT-leaf + LR แต่ใช้ LSH bucket แทน leaf
+- LR แทน lift: 61 seeds ultra **-41.3%** (0/6); 4000 seeds natural **-8.9%** (0/5) —
+  ช่องว่างแคบลงตามจำนวนข้อมูลตาม Ng & Jordan 2001 แต่ไม่แซง; C=1.0 แย่กว่าทุกครั้ง
+- blend (report-only ในสองรอบแรก) ดูดี +2.7% (4/6), +4.7% (5/5) -> **รอบยืนยัน**
+  (seed draw ใหม่, เพิ่ม home_credit) **ไม่ replicate**: `blend_log` = log(lift)+logit
+  pooled -19.6% (5/15); `blend_rank` pooled +4.2% (9/15) แต่ home_credit -11.1% (0/5)
+  -> ผลบวกเดิมเป็นของ fraud เท่านั้น
+- `blend_log` ออกแบบพลาด: logit ของ LR ที่ regularize + balanced มีสเกลกว้างกว่า
+  log(lift) ที่ smooth ด้วย alpha มาก ผลรวมจึงถูก LR ครอบงำ
+**ข้อสรุป:** lift ไม่ใช่ "หาร density ดิบ" — alpha + hier + การรวมแบบ NB ข้าม tables
+คุม variance ไว้แล้ว ส่วน LR บน ~82k คอลัมน์ variance สูงกว่ามากแม้ที่ 4000 seeds
+ใน regime นี้ bias จากสมมติฐาน tables อิสระเสียหายน้อยกว่า variance ของ discriminative fit
+**บทเรียนวินัย:** ถ้าไม่มีรอบยืนยันบน dataset ที่สอง ผลบวก report-only จะถูก ship ผิดๆ
+(ดู `outputs/direct_ratio_*.py`, `outputs/direct_ratio_*_raw.csv`)
+
 **kNN re-rank ของ shortlist (top 10%)** — fraud @ 0.3%, 61 seeds, 6 reps paired, primary p@1%:
 `knn_seed` (-d ถึง seed ที่ 5) **-85.9%** (0/6), `knn_ratio` (log d_bg - log d_seed,
 kNN density-ratio) **-34.2%** (1/6, PR -50%), `blend` (rank-avg กับ lift) +1.0% (3/6)
