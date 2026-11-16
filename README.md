@@ -78,7 +78,10 @@ m.fit(X_week1, y_week1, eval_set=(X_week2, y_week2),
 Already running XGBoost? The measured best use is a **cascade**, not a
 replacement — LeadX shortlists the whole population cheaply, XGBoost re-ranks
 the shortlist (+22.5% Recall@0.1%, 6/6 folds at 1:1,000; see
-[`COMBINER_REPORT.md`](outputs/COMBINER_REPORT.md)):
+[`COMBINER_REPORT.md`](outputs/COMBINER_REPORT.md)). That comparison used an
+untuned XGBoost, so treat the gain as an upper bound until it is re-run against
+a tuned one — the cascade's scaling benefit (XGBoost scores only the shortlist)
+does not depend on it:
 
 ```python
 cand  = m.review_queue(X_next, k=10 * budget)          # LeadX over everything
@@ -200,9 +203,10 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 | ~20 confirmed positives, millions unlabeled, need a review queue | **Unconfirmed** — the original fixed-split +20.4% PR-AUC edge over linear PU shrank to **+1.8% [−8.5%, +9.3%]** against an envelope including Bagging-SVM across 5 new Criteo splits. Recall@0.5% was +3.7% [−1.0%, +11.9%] |
 | Hundreds of confirmed positives | Probably not — linear/bagged PU baselines catch up (+1.7%, CI crosses zero at 100 seeds) |
 | Many labelings over one population, task-head cost is the bottleneck | Yes (architecture) — frozen backbone gives ~ms task heads; accuracy parity with linear PU, not a win |
-| **Ultra-extreme imbalance (~1:10,000) in PU mode** | ✅ **Measured (Criteo 10M, 3 splits×3 draws)** — tree methods collapse here: LeadX beats **XGBoost-PU +325% PR / +208% Recall@0.5% (9/9)**, and beats XGBoost with *full labels* +240% PR (9/9). But **ties a strong linear-PU baseline** (LogReg slightly better on PR) — LeadX is top-tier, not uniquely best. Edge is ultra-specific (gone by 1:1,000). One dataset |
+| **Ultra-extreme imbalance (~1:10,000) in PU mode** | ⚠️ **Revised in v0.5.** The earlier "+325% PR over XGBoost-PU (9/9)" was measured against a fixed XGBoost config (depth 6, balanced `scale_pos_weight`) that **collapses** at this imbalance — tuning it by seed cross-validation alone lifts it +326% on Criteo. Against tuned XGBoost-PU, default LeadX **loses on Criteo 1:10,000** (−10.3% PR, 0/5) and wins on IEEE fraud 0.1–0.3% and Home Credit 1% (+20% to +45% median PR, 3/5–5/5). The "+240% over full-label XGBoost" used the same untuned config and has not been re-run. A strong linear-PU baseline still ties or edges LeadX on Criteo ([§8j](DESIGN_NOTES.md)) |
+| Rare positives, accuracy first, per-task fit acceptable | 🧪 **Experimental (not yet in the library)** — *learned partitions*: PU random-forest leaves used as buckets, scored with LeadX's lift. Against tuned XGBoost-PU: **+32.5% PR-AUC pooled (17/20)** over 4 rare/ultra cells (IEEE fraud 0.1%/0.3% +62%, Home Credit 1% +32%, Criteo 1:10,000 a tie). Costs per-task forest fitting and gives up build-once reuse; worse than default LeadX on Home Credit 1% (−7.8%). Pre-registered and replicated across three seed draws ([§8i–8j](DESIGN_NOTES.md)) |
 | Fully labeled extreme imbalance (supervised) | Usually no at 1:338 and 1:1,000; preliminary crossover at 1:10,000 (see reports) |
-| Scoring a *future* window (weekly fraud queues) | ⚠️ **Measured once** — LeadX doesn't collapse across a time boundary and degrades less than XGBoost at 1:1,000 (+27 pp, 5/6 folds), but a linear PU baseline is equally drift-robust; one dataset, high variance ([`TEMPORAL_FRAUD_REPORT.md`](outputs/TEMPORAL_FRAUD_REPORT.md)) |
+| Scoring a *future* window (weekly fraud queues) | ⚠️ **Measured once** — LeadX doesn't collapse across a time boundary and degrades less than an *untuned* XGBoost at 1:1,000 (+27 pp, 5/6 folds), but a linear PU baseline is equally drift-robust; one dataset, high variance ([`TEMPORAL_FRAUD_REPORT.md`](outputs/TEMPORAL_FRAUD_REPORT.md)) |
 | Need a model that deploys as plain lookup tables | Yes — scoring is bucket lookup (rpforest adds a tree traversal) |
 
 ## Where it fits — proven vs. hypothesis
@@ -216,14 +220,21 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - The reuse win is **speed/architecture, not accuracy** — a frozen backbone sits
   at *parity* with linear PU, not ahead of it.
 
-**Measured in v0.2 — the ultra-imbalance PU regime:**
-- At **~1:10,000 in PU mode** (Criteo 10M, 3 splits × 3 draws), gradient-boosted
-  **trees collapse**: LeadX beats XGBoost-PU **+325% PR-AUC / +208% Recall@0.5%
-  (9/9)**, and beats XGBoost with *full labels* +240% PR (9/9).
-- Honest limit: LeadX **ties a strong linear-PU baseline** (LogReg is slightly
-  better on PR) — so the differentiator here is the reuse/scale architecture on
-  top of top-tier accuracy, not accuracy alone. Edge is ultra-specific (gone by
-  1:1,000). One dataset ([`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md)).
+**Retracted in v0.5 — "trees collapse at 1:10,000":**
+- v0.2 reported that at ~1:10,000 in PU mode (Criteo 10M) LeadX beat XGBoost-PU
+  +325% PR-AUC (9/9) and full-label XGBoost +240% (9/9). Both comparisons used a
+  **fixed, untuned XGBoost config** (300 trees, depth 6, balanced
+  `scale_pos_weight` ≈ 3,000+). It was XGBoost's config that collapsed, not tree
+  methods: choosing depth and class weight by 3-fold cross-validation on the
+  seeds — no test labels used — improves XGBoost-PU by **+326% on Criteo** and
+  +46% pooled across four rare-event cells (18/20).
+- Against that tuned XGBoost-PU, default LeadX **loses on Criteo 1:10,000**
+  (PR .0052 vs .0060, 0/5) while still winning on IEEE fraud 0.1–0.3% and Home
+  Credit 1%. The setups differ (4M vs 10M rows, 115 vs ~500 seeds), so this is
+  strong evidence against the old claim rather than an exact replication.
+- What does beat tuned XGBoost-PU is the experimental **learned-partition**
+  variant above. See [§8j of DESIGN_NOTES](DESIGN_NOTES.md) and
+  [`learned_vs_tuned_xgb_raw.csv`](outputs/learned_vs_tuned_xgb_raw.csv).
 
 ## What's inside
 
@@ -247,12 +258,19 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 - **Auto-tuner**: one hash at max resolution evaluates the whole
   (bits x tables x scoring) grid via prefix masking, cross-fitted to avoid
   OOF leakage; evaluates both engines and picks per dataset.
-- **177 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
+- **207 tests**, benchmark provenance (SHA-256 checksums, versions, git state)
   on every artifact.
 
 ## Benchmarks and evidence policy
 
-All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
+All numbers live in [`outputs/`](outputs/README.md) with raw CSVs.
+
+> **Caveat on every XGBoost comparison before v0.5:** the combiner,
+> complementarity, temporal and Criteo-ultra reports all used the same fixed
+> XGBoost config (300 trees, depth 6, balanced `scale_pos_weight`). At ultra
+> imbalance that config collapses (see the retraction above), so gains over
+> XGBoost reported in those files are **upper bounds** until re-run against a
+> tuned XGBoost.
 
 - [`COMBINER_REPORT.md`](outputs/COMBINER_REPORT.md) — how to spend one review
   budget across LeadX + XGBoost: a **cascade** (LeadX shortlists, XGBoost
@@ -267,8 +285,13 @@ All numbers live in [`outputs/`](outputs/README.md) with raw CSVs:
   past, score the future (IEEE fraud, rolling windows): LeadX survives temporal
   shift and drifts less than XGBoost (+27 pp at 1:1,000, 5/6), but is *not* more
   drift-robust than a linear PU baseline.
-- [`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md) — 1:10,000 PU
-  (production regime): trees collapse, LeadX beats XGBoost 9/9, ties linear-PU.
+- [`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md) — 1:10,000 PU:
+  **superseded** — its XGBoost baselines were untuned and collapsed; against tuned
+  XGBoost-PU default LeadX loses on Criteo (see retraction above). Its
+  linear-PU comparison (LeadX ties LogReg) still stands.
+- [`learned_vs_tuned_xgb_raw.csv`](outputs/learned_vs_tuned_xgb_raw.csv) — v0.5:
+  learned partitions and default LeadX vs XGBoost-PU tuned by seed
+  cross-validation, 4 rare/ultra cells × 5 draws (DESIGN_NOTES §8i–8j).
 - [`CATEGORICAL_MINHASH_REPORT.md`](outputs/CATEGORICAL_MINHASH_REPORT.md) —
   MinHash categorical handling beats one-hot +56% (5/5) on IEEE fraud.
 
@@ -296,14 +319,18 @@ Known limits, stated plainly: Criteo now has multi-split validation but no
 independent-dataset confirmation; the Bagging-SVM paper structure is compared
 with fixed C, but exact reference/modern PU implementations are not; fully
 labeled tuned gradient boosting still wins when labels are abundant; rare-event
-accuracy and frozen-backbone reuse are proven **separately**, not together.
+accuracy and frozen-backbone reuse are proven **separately**, not together;
+XGBoost comparisons before v0.5 used an untuned config that collapses at ultra
+imbalance, and default LeadX loses to tuned XGBoost-PU on Criteo 1:10,000.
 
 ## Roadmap (v0.2)
 
-1. **Ultra-imbalance PU niche** — **measured** (1:10,000, Criteo 10M): beats
-   XGBoost 9/9, ties linear-PU ([`CRITEO_PU_ULTRA_REPORT.md`](outputs/CRITEO_PU_ULTRA_REPORT.md)).
-   Still needed: >=2 independent datasets, and a specialised PU baseline (not
-   just naive unlabeled-as-negative).
+1. **Ultra-imbalance PU niche** — the v0.2 "beats XGBoost 9/9" result is
+   **retracted** (untuned XGBoost). v0.5: learned partitions beat tuned
+   XGBoost-PU on 3 of 4 rare/ultra cells and tie on Criteo; next is shipping
+   them as an engine and re-running the combiner/temporal reports against
+   tuned XGBoost. Still needed: a specialised PU baseline (not just naive
+   unlabeled-as-negative).
 2. Frozen-geometry accuracy: contrast weighting at scoring time
    (per-table task weights) and retrieve-then-rerank on backbone candidates.
 3. Categorical handling via MinHash — **done** (`cat_engine="minhash"`),

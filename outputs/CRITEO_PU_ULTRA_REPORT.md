@@ -1,4 +1,17 @@
-# Criteo PU ultra-imbalance — trees collapse, LeadX holds (v0.2-B, 2026-07)
+# Criteo PU ultra-imbalance (v0.2-B, 2026-07) — XGBoost rows superseded, see erratum
+
+> **Erratum (v0.5, 2026-11-16) — the XGBoost conclusions below are superseded.**
+> Both `xgboost_pu_naive` and `xgboost_oracle` here used one fixed config
+> (300 trees, depth 6, balanced `scale_pos_weight`). That config is what
+> collapses at 1:10,000, not tree methods: tuning depth and class weight by
+> 3-fold cross-validation on the seeds (no test labels) improved XGBoost-PU by
+> +326% PR-AUC on Criteo 1:10,000, and against the tuned model default LeadX
+> **loses** (PR .0052 vs .0060, 0/5). Setups differ (4M vs 10M rows, 115 vs
+> ~500 seeds), so this is strong evidence against the "+325% / +240% (9/9)"
+> rows rather than an exact replication. The LogReg comparison (LeadX ties a
+> linear-PU baseline) is unaffected. Raw numbers below are left unchanged as
+> the historical record. See `learned_vs_tuned_xgb.py`,
+> `learned_vs_tuned_xgb_raw.csv` and DESIGN_NOTES §8j.
 
 Turns the README's **hypothesis** (accuracy edge at ~1:10,000 in PU mode — the
 production regime) into a measured result. Pre-registered protocol locked in
