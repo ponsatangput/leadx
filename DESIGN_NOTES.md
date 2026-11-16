@@ -725,6 +725,32 @@ library train forest แบบ case-control (ต่อ seeds เป็น label 
   numpy (ใบตรงกับ `RandomForestClassifier.apply` ทุกแถว — test) จึง save/load โดยไม่ใช้
   pickle และ score แบบ streaming ได้; scorer = SeedScorer หนึ่งตัวต่อ fold (FoldedScorer)
 
+## 8l. engine="learned" ใน library vs XGBoost-PU ที่จูนแล้ว — ไม่ผ่าน gate (2026-11-16)
+
+วัดโค้ดที่จะ ship โดยตรง (`outputs/learned_engine_vs_tuned_xgb.py`), seed draw ใหม่,
+setup เดียวกับ 8j (4 cells x 5 reps, XGBoost จูนด้วย CV บน seeds)
+
+PR-AUC (median) และ paired vs xgb_tuned:
+| cell | base | learned_lib | xgb_tuned | learned vs xgb |
+|---|---|---|---|---|
+| fraud@0.3% | .0600 | **.0939** | .0568 | +65.4% (5/5) |
+| fraud@0.1% | .0259 | .0226 | .0122 | +35.5% (5/5) |
+| home_credit@1% | .0278 | .0243 | .0174 | +27.3% (5/5) |
+| criteo@1e-4 | .0053 | .0061 | .0062 | **-13.5% (2/5)** |
+
+pooled +24.15% (17/20), p@0.1% +31.67% แต่ **min cell wins 2/5 -> ไม่ผ่าน gate ->
+ไม่ ship** (ใน code ระบุ engine เป็น experimental พร้อมผลนี้)
+
+**learned vs base ไม่ใช่ upgrade ทั่วไป:** pooled +2.05% (12/20); fraud@0.3% +69.9%
+(5/5), criteo +2.9% (4/5), fraud@0.1% **-7.5% (2/5)**, home_credit **-14.2% (1/5)**
+
+**noise ใน cell เล็กสูงกว่าที่ 5 reps รับได้:** learned vs base ที่ fraud@0.1% รอบ 8j
+ได้ +72.1% (4/5) แต่รอบนี้ -7.5% (2/5) ต่างกันแค่ seed draw (test มี positive 87 ราย)
+-> ข้อสรุปราย cell ที่ positive หลักสิบต้องใช้ reps มากกว่านี้มาก
+
+ที่ Criteo จำนวนที่จับได้ไม่แพ้ (top 1%: 39 vs 36, top 0.1%: 11 vs 11) แต่ primary
+metric ที่ pre-register ไว้คือ PR-AUC จึงไม่เปลี่ยนเกณฑ์หลังเห็นผล
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด

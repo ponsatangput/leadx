@@ -204,7 +204,7 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
 | Hundreds of confirmed positives | Probably not — linear/bagged PU baselines catch up (+1.7%, CI crosses zero at 100 seeds) |
 | Many labelings over one population, task-head cost is the bottleneck | Yes (architecture) — frozen backbone gives ~ms task heads; accuracy parity with linear PU, not a win |
 | **Ultra-extreme imbalance (~1:10,000) in PU mode** | ⚠️ **Revised in v0.5.** The earlier "+325% PR over XGBoost-PU (9/9)" was measured against a fixed XGBoost config (depth 6, balanced `scale_pos_weight`) that **collapses** at this imbalance — tuning it by seed cross-validation alone lifts it +326% on Criteo. Against tuned XGBoost-PU, default LeadX **loses on Criteo 1:10,000** (−10.3% PR, 0/5) and wins on IEEE fraud 0.1–0.3% and Home Credit 1% (+20% to +45% median PR, 3/5–5/5). The "+240% over full-label XGBoost" used the same untuned config and has not been re-run. A strong linear-PU baseline still ties or edges LeadX on Criteo ([§8j](DESIGN_NOTES.md)) |
-| Rare positives, accuracy first, per-task fit acceptable | 🧪 **Experimental (not yet in the library)** — *learned partitions*: PU random-forest leaves used as buckets, scored with LeadX's lift. Against tuned XGBoost-PU: **+32.5% PR-AUC pooled (17/20)** over 4 rare/ultra cells (IEEE fraud 0.1%/0.3% +62%, Home Credit 1% +32%, Criteo 1:10,000 a tie). Costs per-task forest fitting and gives up build-once reuse; worse than default LeadX on Home Credit 1% (−7.8%). Pre-registered and replicated across three seed draws ([§8i–8j](DESIGN_NOTES.md)) |
+| Rare positives, accuracy first, per-task fit acceptable | 🧪 **Experimental — failed its shipping gate.** *Learned partitions* (PU random-forest leaves as buckets, scored with LeadX's lift). Prototype vs tuned XGBoost-PU: +32.5% PR-AUC pooled (17/20). The library implementation, re-measured on fresh draws: **+24.2% pooled (17/20)** — IEEE fraud 0.3% +65%, fraud 0.1% +35%, Home Credit 1% +27% (5/5 each) — but **Criteo 1:10,000 −13.5% (2/5)**, so it fails the "≥3/5 in every cell" gate. Against the *default* LeadX engine it is only +2% pooled (12/20): a clear win at fraud 0.3%, losses at fraud 0.1% and Home Credit 1%. Gives up build-once reuse. Not released ([§8i–8l](DESIGN_NOTES.md)) |
 | Fully labeled extreme imbalance (supervised) | Usually no at 1:338 and 1:1,000; preliminary crossover at 1:10,000 (see reports) |
 | Scoring a *future* window (weekly fraud queues) | ⚠️ **Measured once** — LeadX doesn't collapse across a time boundary and degrades less than an *untuned* XGBoost at 1:1,000 (+27 pp, 5/6 folds), but a linear PU baseline is equally drift-robust; one dataset, high variance ([`TEMPORAL_FRAUD_REPORT.md`](outputs/TEMPORAL_FRAUD_REPORT.md)) |
 | Need a model that deploys as plain lookup tables | Yes — scoring is bucket lookup (rpforest adds a tree traversal) |
@@ -232,9 +232,10 @@ see [`outputs/SCALE_VALIDATION_REPORT.md`](outputs/SCALE_VALIDATION_REPORT.md).
   (PR .0052 vs .0060, 0/5) while still winning on IEEE fraud 0.1–0.3% and Home
   Credit 1%. The setups differ (4M vs 10M rows, 115 vs ~500 seeds), so this is
   strong evidence against the old claim rather than an exact replication.
-- What does beat tuned XGBoost-PU is the experimental **learned-partition**
-  variant above. See [§8j of DESIGN_NOTES](DESIGN_NOTES.md) and
-  [`learned_vs_tuned_xgb_raw.csv`](outputs/learned_vs_tuned_xgb_raw.csv).
+- The experimental **learned-partition** variant above beats tuned XGBoost-PU
+  on three of four rare-event cells but still loses on Criteo 1:10,000, so it is
+  not released. See [§8j–8l of DESIGN_NOTES](DESIGN_NOTES.md) and
+  [`learned_engine_vs_tuned_xgb_raw.csv`](outputs/learned_engine_vs_tuned_xgb_raw.csv).
 
 ## What's inside
 
@@ -327,8 +328,9 @@ imbalance, and default LeadX loses to tuned XGBoost-PU on Criteo 1:10,000.
 
 1. **Ultra-imbalance PU niche** — the v0.2 "beats XGBoost 9/9" result is
    **retracted** (untuned XGBoost). v0.5: learned partitions beat tuned
-   XGBoost-PU on 3 of 4 rare/ultra cells and tie on Criteo; next is shipping
-   them as an engine and re-running the combiner/temporal reports against
+   XGBoost-PU on 3 of 4 rare/ultra cells but lose on Criteo (failed the shipping
+   gate); next is more draws on the small cells, where 5 reps proved too noisy,
+   and re-running the combiner/temporal reports against
    tuned XGBoost. Still needed: a specialised PU baseline (not just naive
    unlabeled-as-negative).
 2. Frozen-geometry accuracy: contrast weighting at scoring time
