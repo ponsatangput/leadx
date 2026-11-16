@@ -1,6 +1,6 @@
 [project]
 name = "leadx"
-version = "0.4.0"
+version = "0.5.0"
 description = "Rare-event and fraud retrieval from a handful of confirmed positives - PU-native density-ratio scoring (LSH / rpTree / MinHash) with an XGBoost-shaped API"
 readme = "README.md"
 license = "MIT"

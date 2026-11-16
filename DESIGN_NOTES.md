@@ -751,6 +751,10 @@ pooled +24.15% (17/20), p@0.1% +31.67% แต่ **min cell wins 2/5 -> ไม�
 ที่ Criteo จำนวนที่จับได้ไม่แพ้ (top 1%: 39 vs 36, top 0.1%: 11 vs 11) แต่ primary
 metric ที่ pre-register ไว้คือ PR-AUC จึงไม่เปลี่ยนเกณฑ์หลังเห็นผล
 
+โค้ด engine อยู่ใน development branch และ **ไม่อยู่ใน v0.5.0** — สคริปต์
+`learned_engine_parity.py` กับ `learned_engine_vs_tuned_xgb.py` ต้องใช้โค้ดนั้นจึงจะรันซ้ำได้
+(raw CSV อยู่ใน `outputs/` ครบ)
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
