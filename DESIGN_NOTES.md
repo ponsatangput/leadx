@@ -638,6 +638,45 @@ rpforest ยังชนะเพราะอันดับ engine ไม่เ
 
 ดู `outputs/PRECISION_RECALL_INVESTIGATION.md`
 
+## 8i. Learned partitions — การปรับปรุงแรกที่ replicate ได้ (2026-11-16)
+
+**ที่มา:** ทุกบริษัทที่ใช้ LSH/ANN (Spotify Annoy->Voyager, Meta two-tower+FAISS,
+Uber MinHash) ใช้มันเป็น index บน representation ที่ *เรียนมา* — LeadX ใช้ partition
+สุ่มบน feature ดิบ จึงลองเปลี่ยนแค่ partition เป็นใบของ random forest ที่เรียนจาก
+seeds vs background (ยังเป็น PU) โดยตัวให้คะแนน lift ต่อ bucket เหมือนเดิมทุกประการ
+budget เท่า base: 80 trees x 1024 leaves (`outputs/learned_partition_*.py`)
+
+**ผลสามรอบ (seed draw ไม่ซ้ำกันทุกรอบ), fraud@0.3% / fraud natural / home_credit natural:**
+| รอบ | variant | pooled vs base | หมายเหตุ |
+|---|---|---|---|
+| 1 (primary=leaf_honest) | leaf_honest | +4.81% (11/15) | **ไม่ผ่าน** — fraud@0.3% -33% (1/5) |
+| 1 | hybrid / leaf_naive (report-only) | +7.63% (15/15) / +43.94% (14/15) | |
+| 2 confirm (primary=hybrid) | hybrid | **+9.95% (14/15) ผ่าน** | min cell 4/5 |
+| 2 confirm | leaf_naive | **+45.79% (15/15) ผ่าน gate เดียวกัน** | ทุก cell 5/5 |
+
+**Ablation (รอบ 3, `learned_partition_ablation.py`):**
+- Q1 กฎให้คะแนนของ LeadX ช่วยหรือไม่ — leaf_naive vs rf_proba (forest ชุดเดียวกัน
+  ต่างแค่กฎบนใบ): pooled **+5.36% (13/15) ผ่าน** แต่กระจุกที่ fraud@0.3% **+111% (5/5)**;
+  fraud natural +0.6% (3/5) = เท่ากัน; home_credit +5.4% (5/5)
+  -> lift (alpha smoothing + ตัวหารจากมวล background) ประมาณค่าใบที่มี seed น้อยได้ดี
+  กว่าสัดส่วน class ของ RF มาก — นี่คือส่วนที่ทฤษฎีของ LeadX ให้จริง
+- Q2 เทียบ XGBoost-PU (config เดียวกับ complementarity_benchmark): ไม่มี variant ชนะ
+  แบบ pooled (leaf_naive -0.43% 6/15) แต่แยกตาม regime ชัด:
+  fraud@0.3%: leaf_naive **+81.3% PR (5/5), p@0.1% +71.4%** (PR .0857 vs .0443);
+  natural: เสมอ/แพ้เล็กน้อย (fraud -3.9% 0/5, home_credit -1.7% 1/5)
+  เทียบ base เดิมที่ natural แพ้ XGB -32.9% (fraud) -> learned partition ปิดช่องว่างเกือบหมด
+
+**honest cross-fit (Wager & Athey) เสียที่ seeds น้อย:** ความกลัว overfit ผิดจุด — วัดบน
+test ที่แยกขาด นับ seeds ชุดเดียวกับที่สร้าง tree จึงไม่ทำให้ test ดีเกินจริง แต่การแบ่ง
+seeds ครึ่ง (30/ครึ่งที่ ultra) ทำให้ใบส่วนใหญ่ไม่มี seed จากอีกครึ่ง
+
+**ข้อแลกเปลี่ยน:** partition ขึ้นกับ seeds ของแต่ละโจทย์ -> **เสียจุดขาย build-once**
+สำหรับ leaf_naive (hybrid รักษาไว้บางส่วน); ต้อง fit 2 forests ต่อโจทย์
+
+**ขอบเขต:** ข้อได้เปรียบเหนือ XGBoost มาจาก ultra cell เดียว (fraud@0.3%, 5 reps)
+XGBoost ใช้ config เดิมที่ไม่ได้จูนสำหรับ 61 positives (scale_pos_weight ~3,300)
+ต้องยืนยันที่ ultra cell อื่นและ XGBoost ที่จูนอย่างยุติธรรมก่อน ship
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
