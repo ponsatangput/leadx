@@ -252,6 +252,16 @@ Exact-kNN oracle gate บน home-credit PU (รายละเอียด outp
 
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
+**n_tables 80 -> 160/320 ที่ ultra-imbalance** — fraud @ 0.3%, 61 seeds, 6 reps paired:
+320 vs 80 median **+4.59%** PR-AUC แต่ชนะ **4/6** (gate ต้องการ +3% และ >= 5/6) -> ไม่ผ่าน;
+สอง rep ที่ "แพ้" คือ -0.4% ทั้งคู่ (เสมอ) อีกสี่ rep +4.1..+6.6% -> ทิศทางบวกแต่ยังไม่พอ
+ที่ fit ช้าลง 3.9x (58s -> 229s). precision@0.1% +8.0% (4/6) เป็น secondary
+**สิ่งที่หักล้างชัด:** CV ไม่ลดเลย (14.5 -> 15.5%) และ `miss_rate_join` คงที่ 0.947
+ทุก arm -> ความแปรปรวนที่เหลือคือ **seed draw** (สอดคล้อง variance_decomposition
+ที่ seed draw CV 18% > geometry 8%) ซึ่งเพิ่ม tables แก้ไม่ได้ และสัดส่วน table ที่มี
+หลักฐานบวกต่อแถวไม่ขึ้นกับจำนวน tables (เป็นสมบัติของ seeds/bucket ไม่ใช่ของ ensemble)
+(ดู `outputs/tables_capacity_ultra.py`, `outputs/tables_capacity_ultra_raw.csv`)
+
 **Feature selection ก่อน fit (IG top-k)** — ultra-imbalance, 9 paired draws:
 ทุก variant **แพ้ขาด** — oracle_ig_16 −40.4%, oracle_ig_48 −29.0%, pu_ig_16 −43.8%,
 pu_ig_48 −26.2% (PR-AUC, ชนะ 1/9 เท่ากันหมด; gate ต้องการ +5% และ ≥7/9)
