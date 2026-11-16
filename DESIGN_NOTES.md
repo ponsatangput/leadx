@@ -711,6 +711,20 @@ xgb_tuned ที่ Criteo (-10.3%, 0/5) -> **เคลมเดิมน่า�
 5 reps ต่อ cell; config ของ leaf_naive ยังไม่ได้จูน (ทั้งเป็นข้อเสียเปรียบโดยตั้งใจ และ
 เป็นช่องให้ปรับต่อ)
 
+## 8k. engine="learned" ใน library — parity กับการทดลองไม่ผ่าน (ทิศดีขึ้น) (2026-11-16)
+
+library train forest แบบ case-control (ต่อ seeds เป็น label 1 เพราะ core API ไม่รู้ว่า
+แถวไหนของ background คือ seed) และแบ่ง fold ของ seeds ด้วย rng ของตัวเอง ส่วนการทดลอง
+ติด label ให้ seeds ตรงตำแหน่งใน background (`outputs/learned_engine_parity.py`):
+- fraud@0.3% (61 seeds): library vs experiment **+9.05%** PR median, สูงกว่าทุก rep
+  (+5.0..+13.6%); fraud natural (4000 seeds): +0.40% (|d| 0.48%)
+- library ชนะ base 5/5 ทั้งสอง cell
+- เกณฑ์ pre-registered |delta| <= 5% **ไม่ผ่าน** -> ไม่ใช้ตัวเลขของการทดลองเป็นเคลมของ
+  engine; วัดโค้ดที่ ship โดยตรงแทน (`outputs/learned_engine_vs_tuned_xgb.py`)
+- implementation: sklearn ใช้เฉพาะตอน train; โครงสร้าง tree ดึงเป็น array แล้วเดินด้วย
+  numpy (ใบตรงกับ `RandomForestClassifier.apply` ทุกแถว — test) จึง save/load โดยไม่ใช้
+  pickle และ score แบบ streaming ได้; scorer = SeedScorer หนึ่งตัวต่อ fold (FoldedScorer)
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
