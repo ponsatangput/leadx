@@ -252,6 +252,17 @@ Exact-kNN oracle gate บน home-credit PU (รายละเอียด outp
 
 ## 5.4 ทดลองแล้วปฏิเสธ (กันเดินซ้ำรอย)
 
+**kNN re-rank ของ shortlist (top 10%)** — fraud @ 0.3%, 61 seeds, 6 reps paired, primary p@1%:
+`knn_seed` (-d ถึง seed ที่ 5) **-85.9%** (0/6), `knn_ratio` (log d_bg - log d_seed,
+kNN density-ratio) **-34.2%** (1/6, PR -50%), `blend` (rank-avg กับ lift) +1.0% (3/6)
+แต่ PR -8.1% -> ไม่มี variant ผ่าน gate (+3%, >= 5/6, PR >= -2%)
+**ข้อสรุป:** ระยะ Euclidean ใน encoded+weighted space (~170 มิติ) *แย่กว่า* bucket
+density ของ LeadX มาก — แถวที่ใกล้ seed ที่สุดแทบไม่ใช่ fraud (p@0.1% = 0) สอดคล้องกับ
+ผล feature selection: สัญญาณอยู่ใน *การประกอบกัน* ของ feature ขณะที่ระยะรวมทุกมิติถูก
+มิติที่มีสัญญาณอ่อนจำนวนมากกลบ; การโหวตข้าม random projections ทนต่อสิ่งนี้ได้ดีกว่า
+(ไม่ได้ทดสอบ metric อื่น เช่น cosine/Mahalanobis — ปิดเฉพาะ Euclidean kNN)
+(ดู `outputs/knn_rerank_experiment.py`, `outputs/knn_rerank_raw.csv`)
+
 **n_tables 80 -> 160/320 ที่ ultra-imbalance** — fraud @ 0.3%, 61 seeds, 6 reps paired:
 320 vs 80 median **+4.59%** PR-AUC แต่ชนะ **4/6** (gate ต้องการ +3% และ >= 5/6) -> ไม่ผ่าน;
 สอง rep ที่ "แพ้" คือ -0.4% ทั้งคู่ (เสมอ) อีกสี่ rep +4.1..+6.6% -> ทิศทางบวกแต่ยังไม่พอ
