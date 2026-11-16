@@ -677,6 +677,40 @@ seeds ครึ่ง (30/ครึ่งที่ ultra) ทำให้ใบ�
 XGBoost ใช้ config เดิมที่ไม่ได้จูนสำหรับ 61 positives (scale_pos_weight ~3,300)
 ต้องยืนยันที่ ultra cell อื่นและ XGBoost ที่จูนอย่างยุติธรรมก่อน ship
 
+## 8j. Learned partitions vs XGBoost-PU ที่จูนแล้ว — ผ่าน gate (2026-11-16)
+
+`outputs/learned_vs_tuned_xgb.py` — 4 cells x 5 reps, seed draw ใหม่, XGBoost จูนด้วย
+3-fold CV บน seeds (AP ของ seeds ที่กันไว้ vs background ที่กันไว้; ไม่แตะ test)
+grid depth {2,4,6} x scale_pos_weight {balanced, sqrt}; leaf_naive **ไม่จูน**
+
+PR-AUC (median):
+| cell | base | **leaf_naive** | hybrid | xgb_fixed | xgb_tuned |
+|---|---|---|---|---|---|
+| fraud@0.3% (61 seeds) | .0469 | **.0708** | .0508 | .0189 | .0438 |
+| fraud@0.1% (20 seeds) | .0213 | **.0319** | .0272 | .0136 | .0161 |
+| home_credit@1% (97 seeds) | .0275 | .0249 | **.0276** | .0156 | .0189 |
+| criteo@1e-4 (115 seeds) | .0052 | .0059 | .0052 | .0014 | **.0060** |
+
+**PRIMARY leaf_naive vs xgb_tuned: pooled +32.53% (17/20), p@0.1% +17.05%, ทุก cell
+>= 3/5 -> ผ่าน gate** ราย cell: fraud@0.3% +61.7% (5/5), fraud@0.1% +62.2% (5/5),
+home_credit@1% +32.0% (4/5), criteo +13.8% (3/5, p@0.1% -7.7%) — ที่ Criteo ระดับ
+median แทบเท่ากัน (.0059 vs .0060) จึงนับเป็นเสมอ ไม่ใช่ชนะ
+
+**leaf_naive vs base ไม่สม่ำเสมอ:** fraud@0.1% +72.1% (4/5), fraud@0.3% +40.5% (4/5),
+criteo +15.2% (5/5) แต่ **home_credit@1% -7.8% (0/5)** — ที่ cell นั้น hybrid ดีสุด
+
+**การค้นพบที่กระทบเคลมเก่า:** XGBoost config ตายตัว (depth 6, spw balanced) **พังที่
+ultra** — จูนแล้วดีขึ้น +46.4% pooled (18/20); ที่ Criteo +325.6% (5/5) โดย xgb_fixed
+ได้ PR .0014 เทียบ xgb_tuned .0060. เคลมเดิม "LeadX ชนะ XGBoost 9/9 ที่ 1:10,000"
+(criteo_pu_ultra_benchmark) เทียบกับ config ตายตัวนี้ ในการทดลองนี้ base แพ้
+xgb_tuned ที่ Criteo (-10.3%, 0/5) -> **เคลมเดิมน่าจะไม่รอดเมื่อเทียบกับ XGBoost ที่จูน
+อย่างยุติธรรม** (setup ไม่เหมือนกันทุกประการ: 4M vs 10M แถว, 115 vs ~500 seeds จึง
+ยังไม่ใช่การหักล้างตรง แต่ต้องทบทวน README/positioning)
+
+**ขอบเขต:** Criteo test มี positive 82 ตัว, fraud@0.1% test ~88 — PR ระดับนี้ noise สูง
+5 reps ต่อ cell; config ของ leaf_naive ยังไม่ได้จูน (ทั้งเป็นข้อเสียเปรียบโดยตั้งใจ และ
+เป็นช่องให้ปรับต่อ)
+
 ## 8. Audit 2026-07-18 — สิ่งที่ยังไม่ได้ทำและ roadmap ถัดไป
 
 ### คำตัดสินจากผลล่าสุด
